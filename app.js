@@ -1371,7 +1371,18 @@ const App = (() => {
         $$('.schedule-task-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 _afterAssignCallback = renderTasks;
-                openAssignModal(null, { taskId: btn.dataset.id });
+                const taskId = btn.dataset.id;
+                const filteredMemberId = $('tasks-member-filter').value;
+                // If member filter active, open existing schedule in edit mode to avoid duplicates
+                const existingSchedule = filteredMemberId !== 'all'
+                    ? state.schedules.find(s => s.taskId === taskId && s.memberId === filteredMemberId)
+                    : null;
+                if (existingSchedule) {
+                    openAssignModal(existingSchedule);
+                } else {
+                    const preMemberId = filteredMemberId !== 'all' ? filteredMemberId : null;
+                    openAssignModal(null, { taskId, memberId: preMemberId });
+                }
             });
         });
     }
@@ -1414,6 +1425,10 @@ const App = (() => {
             const timeOfDay = (frequency === 'daily' || frequency === 'recurring') ? [...selectedTimeOfDay] : [];
 
             if (editingScheduleId) {
+                // Update the schedule being edited, and purge any duplicates for this task+member
+                state.schedules = state.schedules.filter(s =>
+                    s.id === editingScheduleId || !(s.taskId === taskId && s.memberId === memberId)
+                );
                 const schedule = state.schedules.find(s => s.id === editingScheduleId);
                 if (schedule) {
                     schedule.taskId = taskId;
@@ -1423,22 +1438,16 @@ const App = (() => {
                     schedule.timeOfDay = timeOfDay;
                 }
             } else {
-                // Check if this task+member combo is already scheduled — update it rather than duplicate
-                const existing = state.schedules.find(s => s.taskId === taskId && s.memberId === memberId);
-                if (existing) {
-                    existing.frequency = frequency;
-                    existing.days = [...selectedDays];
-                    existing.timeOfDay = timeOfDay;
-                } else {
-                    state.schedules.push({
-                        id: uid(),
-                        taskId,
-                        memberId,
-                        frequency,
-                        days: [...selectedDays],
-                        timeOfDay
-                    });
-                }
+                // Remove ALL existing schedules for this task+member (cleans up duplicates), then add one fresh entry
+                state.schedules = state.schedules.filter(s => !(s.taskId === taskId && s.memberId === memberId));
+                state.schedules.push({
+                    id: uid(),
+                    taskId,
+                    memberId,
+                    frequency,
+                    days: [...selectedDays],
+                    timeOfDay
+                });
             }
             await gist.save();
             $('assign-modal').classList.add('hidden');
@@ -1693,11 +1702,23 @@ const App = (() => {
             });
         });
 
-        // Schedule buttons for unscheduled/needs-days tasks
+        // Schedule buttons for unassigned/needs-days tasks
         $$('#schedule-content .schedule-task-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 _afterAssignCallback = renderSchedule;
-                openAssignModal(null, { taskId: btn.dataset.id });
+                const taskId = btn.dataset.id;
+                const filteredMemberId = $('schedule-member-filter').value;
+                // If a specific member is selected in the filter, find their existing schedule to edit
+                const existingSchedule = filteredMemberId !== 'all'
+                    ? state.schedules.find(s => s.taskId === taskId && s.memberId === filteredMemberId)
+                    : null;
+                if (existingSchedule) {
+                    openAssignModal(existingSchedule);
+                } else {
+                    // Pre-fill task and member (if filter active) but create new
+                    const preMemberId = filteredMemberId !== 'all' ? filteredMemberId : null;
+                    openAssignModal(null, { taskId, memberId: preMemberId });
+                }
             });
         });
     }
