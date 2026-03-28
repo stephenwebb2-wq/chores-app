@@ -908,6 +908,54 @@ header nav {
     margin-top: 26px;
 }
 
+/* ===== Avatar Upload ===== */
+.avatar-upload {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.avatar-preview {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+    border: 2px solid var(--border);
+}
+
+.avatar-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.avatar-preview span {
+    font-size: 0.68rem;
+    color: var(--text-light);
+    text-align: center;
+}
+
+.avatar-upload-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.avatar.has-photo {
+    overflow: hidden;
+}
+
+.avatar.has-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
 /* ===== Color Picker ===== */
 .color-picker {
     display: flex;

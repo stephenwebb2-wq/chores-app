@@ -82,15 +82,18 @@ const App = (() => {
     }
 
     function today() {
-        return new Date().toISOString().split('T')[0];
+        return localDateStr(new Date());
     }
 
     function dayOfWeek(date) {
-        return new Date(date).getDay(); // 0=Sun
+        // Parse YYYY-MM-DD as local time (not UTC)
+        const [y, m, d] = date.split('-').map(Number);
+        return new Date(y, m - 1, d).getDay(); // 0=Sun
     }
 
     function dayOfMonth(date) {
-        return new Date(date).getDate();
+        const [, , d] = date.split('-').map(Number);
+        return d;
     }
 
     function getDayName(num) {
@@ -106,7 +109,10 @@ const App = (() => {
             let applies = false;
             if (s.frequency === 'daily' || s.frequency === 'recurring') applies = true;
             else if (s.frequency === 'weekly') applies = s.days.includes(dow);
-            else if (s.frequency === 'monthly') applies = s.days.includes(dom);
+            else if (s.frequency === 'monthly') {
+                // If no specific days picked, show as flexible (any day this month)
+                applies = (!s.days || s.days.length === 0) ? true : s.days.includes(dom);
+            }
             if (!applies) return;
 
             // For daily/recurring tasks with multiple time-of-day slots, expand into separate entries
@@ -289,6 +295,13 @@ const App = (() => {
         return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
     }
 
+    function renderAvatar(member) {
+        if (member.photo) {
+            return `<div class="avatar has-photo" style="background:${member.color}"><img src="${member.photo}" alt="${member.name}"></div>`;
+        }
+        return `<div class="avatar" style="background:${member.color}">${getInitials(member.name)}</div>`;
+    }
+
     function $(id) { return document.getElementById(id); }
     function $$(sel) { return document.querySelectorAll(sel); }
 
@@ -448,7 +461,7 @@ const App = (() => {
 
             return `<div class="dashboard-card" data-member="${member.id}">
                 <div class="card-header">
-                    <div class="avatar" style="background:${color}">${getInitials(member.name)}</div>
+                    ${renderAvatar(member)}
                     <h3>${member.name}</h3>
                 </div>
                 <div class="progress-bar">
@@ -478,7 +491,7 @@ const App = (() => {
         for (let i = 0; i < 7; i++) {
             const wd = new Date(startOfWeek);
             wd.setDate(startOfWeek.getDate() + i);
-            weekDates.push(wd.toISOString().split('T')[0]);
+            weekDates.push(localDateStr(wd));
         }
 
         container.innerHTML = state.family.map(member => {
@@ -509,7 +522,7 @@ const App = (() => {
         $$('.nav-btn').forEach(b => b.classList.remove('active'));
 
         $('member-header').innerHTML = `
-            <div class="avatar" style="background:${member.color}">${getInitials(member.name)}</div>
+            ${renderAvatar(member)}
             <div>
                 <h2>${member.name}</h2>
                 <span class="date-display">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
@@ -760,6 +773,19 @@ const App = (() => {
     // --- Family ---
     let editingMemberId = null;
     let selectedColor = '#FF6B6B';
+    let selectedPhoto = null; // base64 data URL or null
+
+    function updateAvatarPreview() {
+        const preview = $('avatar-preview');
+        const removeBtn = $('remove-avatar-btn');
+        if (selectedPhoto) {
+            preview.innerHTML = `<img src="${selectedPhoto}" alt="Photo">`;
+            removeBtn.classList.remove('hidden');
+        } else {
+            preview.innerHTML = '<span id="avatar-preview-text">No photo</span>';
+            removeBtn.classList.add('hidden');
+        }
+    }
 
     function initFamily() {
         $('add-member-btn').addEventListener('click', () => {
@@ -767,12 +793,47 @@ const App = (() => {
             $('member-modal-title').textContent = 'Add Family Member';
             $('member-name').value = '';
             selectedColor = '#FF6B6B';
+            selectedPhoto = null;
             updateColorSelection();
+            updateAvatarPreview();
             $('member-modal').classList.remove('hidden');
         });
 
         $('cancel-member-btn').addEventListener('click', () => {
             $('member-modal').classList.add('hidden');
+        });
+
+        // Photo upload handler
+        $('avatar-file').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            // Resize to keep gist size manageable (max 128px)
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const size = 128;
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx = canvas.getContext('2d');
+                    // Crop to square center
+                    const minDim = Math.min(img.width, img.height);
+                    const sx = (img.width - minDim) / 2;
+                    const sy = (img.height - minDim) / 2;
+                    ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+                    selectedPhoto = canvas.toDataURL('image/jpeg', 0.7);
+                    updateAvatarPreview();
+                };
+                img.src = ev.target.result;
+            };
+            reader.readAsDataURL(file);
+            e.target.value = '';
+        });
+
+        $('remove-avatar-btn').addEventListener('click', () => {
+            selectedPhoto = null;
+            updateAvatarPreview();
         });
 
         $('save-member-btn').addEventListener('click', async () => {
@@ -784,9 +845,10 @@ const App = (() => {
                 if (member) {
                     member.name = name;
                     member.color = selectedColor;
+                    member.photo = selectedPhoto || null;
                 }
             } else {
-                state.family.push({ id: uid(), name, color: selectedColor });
+                state.family.push({ id: uid(), name, color: selectedColor, photo: selectedPhoto || null });
             }
             await gist.save();
             $('member-modal').classList.add('hidden');
@@ -815,7 +877,7 @@ const App = (() => {
 
         $('family-list').innerHTML = state.family.map(m => `
             <div class="family-card">
-                <div class="avatar" style="background:${m.color}">${getInitials(m.name)}</div>
+                ${renderAvatar(m)}
                 <h3>${m.name}</h3>
                 <div class="family-card-actions">
                     <button class="btn btn-small edit-member" data-id="${m.id}">Edit</button>
@@ -832,7 +894,9 @@ const App = (() => {
                 $('member-modal-title').textContent = 'Edit Family Member';
                 $('member-name').value = member.name;
                 selectedColor = member.color;
+                selectedPhoto = member.photo || null;
                 updateColorSelection();
+                updateAvatarPreview();
                 $('member-modal').classList.remove('hidden');
             });
         });
@@ -1178,6 +1242,8 @@ const App = (() => {
             const hasRecurringSchedule = t.isRecurring || state.schedules.some(s => s.taskId === t.id && s.frequency === 'recurring');
             const recurringBadge = hasRecurringSchedule ? '<span class="tod-badge tod-recurring">Recurring</span>' : '';
 
+            const showScheduleBtn = status === 'unscheduled' || status === 'no-days';
+
             return `<div class="task-item">
                 <div class="task-info">
                     <span class="task-category-badge cat-${t.category}">${t.category}</span>
@@ -1188,6 +1254,7 @@ const App = (() => {
                     ${assigneeText ? `<span class="task-assignee">${assigneeText}</span>` : ''}
                 </div>
                 <div class="task-actions">
+                    ${showScheduleBtn ? `<button class="btn btn-small schedule-task-btn" data-id="${t.id}" style="color:var(--primary);border-color:var(--primary)">Schedule</button>` : ''}
                     <button class="btn btn-small edit-task" data-id="${t.id}">Edit</button>
                     <button class="btn btn-small delete-task" data-id="${t.id}" style="color:var(--danger)">Delete</button>
                 </div>
@@ -1216,6 +1283,14 @@ const App = (() => {
                 state.schedules = state.schedules.filter(s => s.taskId !== id);
                 await gist.save();
                 renderTasks();
+            });
+        });
+
+        // Schedule button — opens assign modal pre-filled with this task
+        $$('.schedule-task-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                _afterAssignCallback = renderTasks;
+                openAssignModal(null, { taskId: btn.dataset.id });
             });
         });
     }
@@ -1279,21 +1354,31 @@ const App = (() => {
             await gist.save();
             $('assign-modal').classList.add('hidden');
             renderSchedule();
+            // Also refresh tasks view if it was open (to update status badges)
+            if (_afterAssignCallback) { _afterAssignCallback(); _afterAssignCallback = null; }
         });
 
         $('schedule-member-filter').addEventListener('change', renderSchedule);
+        $('schedule-status-filter').addEventListener('change', renderSchedule);
     }
 
-    function openAssignModal(scheduleToEdit) {
+    let _afterAssignCallback = null;
+
+    // preselect: optional { taskId, memberId } to pre-fill for quick scheduling from Tasks view
+    function openAssignModal(scheduleToEdit, preselect) {
         editingScheduleId = scheduleToEdit ? scheduleToEdit.id : null;
 
-        // Populate dropdowns
-        $('assign-task').innerHTML = state.tasks.map(t =>
-            `<option value="${t.id}" ${scheduleToEdit && scheduleToEdit.taskId === t.id ? 'selected' : ''}>${t.name}</option>`
+        const preTaskId = preselect?.taskId || (scheduleToEdit?.taskId);
+        const preMemberId = preselect?.memberId || (scheduleToEdit?.memberId);
+
+        // Populate dropdowns (tasks sorted alphabetically)
+        const sortedTasks = [...state.tasks].sort((a, b) => a.name.localeCompare(b.name));
+        $('assign-task').innerHTML = sortedTasks.map(t =>
+            `<option value="${t.id}" ${preTaskId === t.id ? 'selected' : ''}>${t.name}</option>`
         ).join('');
 
         $('assign-member').innerHTML = state.family.map(m =>
-            `<option value="${m.id}" ${scheduleToEdit && scheduleToEdit.memberId === m.id ? 'selected' : ''}>${m.name}</option>`
+            `<option value="${m.id}" ${preMemberId === m.id ? 'selected' : ''}>${m.name}</option>`
         ).join('');
 
         if (scheduleToEdit) {
@@ -1359,74 +1444,149 @@ const App = (() => {
     }
 
     function renderSchedule() {
-        // Update filter dropdown
+        // Update member filter dropdown
         const filter = $('schedule-member-filter');
         const currentVal = filter.value;
         filter.innerHTML = '<option value="all">All Members</option>' +
             state.family.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
         filter.value = currentVal;
 
-        const filteredSchedules = currentVal === 'all'
-            ? state.schedules
-            : state.schedules.filter(s => s.memberId === currentVal);
+        const statusFilter = $('schedule-status-filter').value;
 
         if (state.tasks.length === 0 || state.family.length === 0) {
             $('schedule-content').innerHTML = '<div class="empty-state"><p>Add family members and tasks first, then assign tasks here.</p></div>';
             return;
         }
 
-        if (filteredSchedules.length === 0) {
-            $('schedule-content').innerHTML = `
-                <div class="empty-state">
-                    <p>No tasks scheduled yet.</p>
-                    <button class="btn btn-primary" id="first-assign-btn">+ Assign a Task</button>
-                </div>`;
-            $('first-assign-btn')?.addEventListener('click', () => openAssignModal());
-            return;
-        }
-
-        // Group by frequency
-        const groups = { daily: [], weekly: [], monthly: [], recurring: [] };
-        filteredSchedules.forEach(s => {
-            if (groups[s.frequency]) groups[s.frequency].push(s);
-        });
-
         let html = '';
-        for (const [freq, items] of Object.entries(groups)) {
-            if (items.length === 0) continue;
-            html += `<div class="schedule-section">
-                <h3>
-                    <span><span class="frequency-badge freq-${freq}">${freq}</span> Tasks</span>
-                    <button class="btn btn-small add-schedule-btn">+ Assign</button>
-                </h3>`;
-            items.forEach(s => {
-                const task = state.tasks.find(t => t.id === s.taskId);
-                const member = state.family.find(m => m.id === s.memberId);
-                let daysText = '';
-                if (freq === 'weekly') daysText = s.days.map(d => getDayName(d)).join(', ');
-                if (freq === 'monthly') daysText = s.days.map(d => `${d}${ordinal(d)}`).join(', ');
 
-                html += `<div class="schedule-item">
-                    <div class="schedule-item-info">
-                        <span class="schedule-member-badge" style="background:${member?.color || '#999'}">${member?.name || '?'}</span>
-                        <span>${task?.name || 'Unknown task'}</span>
-                        ${daysText ? `<span class="schedule-days">(${daysText})</span>` : ''}
-                    </div>
-                    <div class="task-actions">
-                        <button class="btn btn-small edit-schedule" data-id="${s.id}">Edit</button>
-                        <button class="btn btn-small delete-schedule" data-id="${s.id}" style="color:var(--danger)">Remove</button>
-                    </div>
-                </div>`;
-            });
-            html += '</div>';
+        // === Show unscheduled / needs-days tasks ===
+        if (statusFilter === 'unscheduled' || statusFilter === 'no-days' || statusFilter === 'all') {
+            let unschedTasks;
+            let sectionTitle;
+            if (statusFilter === 'unscheduled') {
+                unschedTasks = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'unscheduled');
+                sectionTitle = 'Unscheduled Tasks';
+            } else if (statusFilter === 'no-days') {
+                unschedTasks = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'no-days');
+                sectionTitle = 'Tasks Needing Days Picked';
+            } else {
+                // "all" — show both unscheduled and needs-days
+                unschedTasks = state.tasks.filter(t => {
+                    const s = getTaskScheduleStatus(t.id);
+                    return s === 'unscheduled' || s === 'no-days';
+                });
+                sectionTitle = 'Tasks Needing Attention';
+            }
+
+            // Sub-filter by member
+            if (currentVal !== 'all') {
+                if (statusFilter === 'unscheduled') {
+                    // Unscheduled means no schedules at all — can't filter by member
+                } else {
+                    // For needs-days, filter to tasks assigned to this member
+                    const memberTaskIds = new Set(
+                        state.schedules.filter(s => s.memberId === currentVal).map(s => s.taskId)
+                    );
+                    unschedTasks = unschedTasks.filter(t => memberTaskIds.has(t.id));
+                }
+            }
+
+            if (unschedTasks.length > 0) {
+                html += `<div class="schedule-section">
+                    <h3><span>${sectionTitle} (${unschedTasks.length})</span></h3>`;
+                unschedTasks.forEach(t => {
+                    const status = getTaskScheduleStatus(t.id);
+                    const assignees = state.schedules
+                        .filter(s => s.taskId === t.id)
+                        .map(s => state.family.find(m => m.id === s.memberId)?.name)
+                        .filter(Boolean);
+                    const assigneeText = assignees.length > 0 ? assignees.join(', ') : '';
+                    const statusBadge = status === 'unscheduled'
+                        ? '<span class="status-badge status-unscheduled">Unscheduled</span>'
+                        : '<span class="status-badge status-nodays">Needs Days</span>';
+
+                    html += `<div class="schedule-item">
+                        <div class="schedule-item-info">
+                            <span class="task-category-badge cat-${t.category}">${t.category}</span>
+                            <span>${t.name}</span>
+                            ${statusBadge}
+                            ${assigneeText ? `<span class="task-assignee">${assigneeText}</span>` : ''}
+                        </div>
+                        <div class="task-actions">
+                            <button class="btn btn-small schedule-task-btn" data-id="${t.id}" style="color:var(--primary);border-color:var(--primary)">Schedule</button>
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+            } else if (statusFilter !== 'all' && statusFilter !== 'scheduled') {
+                html += '<div class="empty-state"><p>No tasks match this filter.</p></div>';
+            }
         }
 
-        // Add a floating assign button if there are already schedules
-        html += `<div style="text-align:center;margin-top:12px;">
-            <button class="btn btn-primary add-schedule-btn">+ Assign a Task</button>
-        </div>`;
+        // === Show existing schedules ===
+        if (statusFilter === 'scheduled' || statusFilter === 'all') {
+            const filteredSchedules = currentVal === 'all'
+                ? state.schedules
+                : state.schedules.filter(s => s.memberId === currentVal);
+
+            if (filteredSchedules.length === 0 && statusFilter === 'scheduled') {
+                html += `
+                    <div class="empty-state">
+                        <p>No tasks scheduled yet.</p>
+                        <button class="btn btn-primary" id="first-assign-btn">+ Assign a Task</button>
+                    </div>`;
+            } else if (filteredSchedules.length > 0) {
+                // Group by frequency
+                const groups = { daily: [], weekly: [], monthly: [], recurring: [] };
+                filteredSchedules.forEach(s => {
+                    if (groups[s.frequency]) groups[s.frequency].push(s);
+                });
+
+                for (const [freq, items] of Object.entries(groups)) {
+                    if (items.length === 0) continue;
+                    html += `<div class="schedule-section">
+                        <h3>
+                            <span><span class="frequency-badge freq-${freq}">${freq}</span> Tasks</span>
+                            <button class="btn btn-small add-schedule-btn">+ Assign</button>
+                        </h3>`;
+                    items.forEach(s => {
+                        const task = state.tasks.find(t => t.id === s.taskId);
+                        const member = state.family.find(m => m.id === s.memberId);
+                        let daysText = '';
+                        if (freq === 'weekly') daysText = s.days.map(d => getDayName(d)).join(', ');
+                        if (freq === 'monthly') {
+                            daysText = s.days.length > 0
+                                ? s.days.map(d => `${d}${ordinal(d)}`).join(', ')
+                                : 'Flexible (any day)';
+                        }
+
+                        html += `<div class="schedule-item">
+                            <div class="schedule-item-info">
+                                <span class="schedule-member-badge" style="background:${member?.color || '#999'}">${member?.name || '?'}</span>
+                                <span>${task?.name || 'Unknown task'}</span>
+                                ${daysText ? `<span class="schedule-days">(${daysText})</span>` : ''}
+                            </div>
+                            <div class="task-actions">
+                                <button class="btn btn-small edit-schedule" data-id="${s.id}">Edit</button>
+                                <button class="btn btn-small delete-schedule" data-id="${s.id}" style="color:var(--danger)">Remove</button>
+                            </div>
+                        </div>`;
+                    });
+                    html += '</div>';
+                }
+            }
+
+            // Add assign button
+            html += `<div style="text-align:center;margin-top:12px;">
+                <button class="btn btn-primary add-schedule-btn">+ Assign a Task</button>
+            </div>`;
+        }
 
         $('schedule-content').innerHTML = html;
+
+        // Wire up handlers
+        $('first-assign-btn')?.addEventListener('click', () => openAssignModal());
 
         $$('.add-schedule-btn').forEach(btn => {
             btn.addEventListener('click', () => openAssignModal());
@@ -1447,6 +1607,14 @@ const App = (() => {
                 renderSchedule();
             });
         });
+
+        // Schedule buttons for unscheduled/needs-days tasks
+        $$('#schedule-content .schedule-task-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                _afterAssignCallback = renderSchedule;
+                openAssignModal(null, { taskId: btn.dataset.id });
+            });
+        });
     }
 
     function ordinal(n) {
@@ -1461,9 +1629,13 @@ const App = (() => {
         $('reports-period').addEventListener('change', renderReports);
     }
 
+    function localDateStr(d) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
     function getDateRange(period) {
         const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
+        const todayStr = localDateStr(now);
 
         if (period === 'today') {
             return [todayStr, todayStr];
@@ -1473,12 +1645,12 @@ const App = (() => {
             start.setDate(now.getDate() - now.getDay());
             const end = new Date(start);
             end.setDate(start.getDate() + 6);
-            return [start.toISOString().split('T')[0], end.toISOString().split('T')[0]];
+            return [localDateStr(start), localDateStr(end)];
         }
         if (period === 'month') {
             const start = new Date(now.getFullYear(), now.getMonth(), 1);
             const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            return [start.toISOString().split('T')[0], end.toISOString().split('T')[0]];
+            return [localDateStr(start), localDateStr(end)];
         }
         // all-time: scan all dates in completions
         const dates = Object.keys(state.completions).sort();
@@ -1491,7 +1663,10 @@ const App = (() => {
         const current = new Date(start + 'T00:00:00');
         const endDate = new Date(end + 'T00:00:00');
         while (current <= endDate) {
-            dates.push(current.toISOString().split('T')[0]);
+            const y = current.getFullYear();
+            const m = String(current.getMonth() + 1).padStart(2, '0');
+            const d = String(current.getDate()).padStart(2, '0');
+            dates.push(`${y}-${m}-${d}`);
             current.setDate(current.getDate() + 1);
         }
         return dates;
@@ -1566,7 +1741,7 @@ const App = (() => {
 
             html += `<div class="report-card">
                 <div class="report-card-header">
-                    <div class="avatar" style="background:${member.color}">${getInitials(member.name)}</div>
+                    ${renderAvatar(member)}
                     <h4>${member.name}</h4>
                 </div>
                 <div class="report-stats">
@@ -1785,7 +1960,7 @@ const App = (() => {
         for (let i = 0; i < 7; i++) {
             const wd = new Date(weekStart);
             wd.setDate(weekStart.getDate() + i);
-            weekDates.push(wd.toISOString().split('T')[0]);
+            weekDates.push(localDateStr(wd));
         }
 
         members.forEach(member => {

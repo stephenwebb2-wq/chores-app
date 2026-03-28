@@ -67,6 +67,19 @@
                             <input type="text" id="member-name" placeholder="Enter name">
                         </div>
                         <div class="form-group">
+                            <label>Profile Picture <span class="optional">(optional)</span></label>
+                            <div class="avatar-upload">
+                                <div id="avatar-preview" class="avatar-preview">
+                                    <span id="avatar-preview-text">No photo</span>
+                                </div>
+                                <div class="avatar-upload-actions">
+                                    <label for="avatar-file" class="btn btn-small" style="cursor:pointer">Upload Photo</label>
+                                    <input type="file" id="avatar-file" accept="image/*" class="hidden">
+                                    <button type="button" id="remove-avatar-btn" class="btn btn-small hidden" style="color:var(--danger)">Remove</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
                             <label for="member-avatar">Avatar Color</label>
                             <div id="color-picker" class="color-picker">
                                 <span class="color-swatch" data-color="#FF6B6B" style="background:#FF6B6B"></span>
@@ -158,6 +171,12 @@
                 <div class="view-header">
                     <h2>Schedule</h2>
                     <div class="view-actions">
+                        <select id="schedule-status-filter">
+                            <option value="scheduled">Scheduled</option>
+                            <option value="unscheduled">Unscheduled</option>
+                            <option value="no-days">Needs Days Picked</option>
+                            <option value="all">All</option>
+                        </select>
                         <select id="schedule-member-filter">
                             <option value="all">All Members</option>
                         </select>
