@@ -36,6 +36,7 @@
                     <button class="nav-btn" data-view="family">Family</button>
                     <button class="nav-btn" data-view="tasks">Tasks</button>
                     <button class="nav-btn" data-view="schedule">Schedule</button>
+                    <button class="nav-btn" data-view="reports">Reports</button>
                 </nav>
                 <button id="settings-btn" class="btn btn-icon" title="Settings">⚙</button>
             </header>
@@ -91,11 +92,23 @@
                 <div class="view-header">
                     <h2>Tasks</h2>
                     <div class="view-actions">
+                        <select id="tasks-filter">
+                            <option value="all">All Tasks</option>
+                            <option value="unscheduled">Unscheduled</option>
+                            <option value="no-days">Needs Days Picked</option>
+                            <option value="cleaning">Cleaning</option>
+                            <option value="kitchen">Kitchen</option>
+                            <option value="laundry">Laundry</option>
+                            <option value="outdoor">Outdoor</option>
+                            <option value="pets">Pets</option>
+                            <option value="other">Other</option>
+                        </select>
                         <button id="import-tasks-btn" class="btn btn-secondary">Import Spreadsheet</button>
                         <button id="add-task-btn" class="btn btn-primary">+ Add Task</button>
                     </div>
                 </div>
                 <input type="file" id="file-input" accept=".csv,.xlsx,.xls" class="hidden">
+                <div id="tasks-filter-info" class="filter-info hidden"></div>
                 <div id="tasks-list" class="tasks-list"></div>
 
                 <!-- Add/Edit Task Modal -->
@@ -161,6 +174,14 @@
                                 <option value="monthly">Monthly</option>
                             </select>
                         </div>
+                        <div id="time-of-day-picker" class="day-picker hidden">
+                            <label>Time of Day</label>
+                            <div id="time-of-day-options" class="day-options">
+                                <span class="day-option" data-tod="morning">Morning</span>
+                                <span class="day-option" data-tod="afternoon">Afternoon</span>
+                                <span class="day-option" data-tod="evening">Evening</span>
+                            </div>
+                        </div>
                         <div id="day-picker" class="day-picker">
                             <label>Days</label>
                             <div id="day-options" class="day-options"></div>
@@ -171,6 +192,25 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Reports View -->
+            <div id="reports-view" class="view hidden">
+                <div class="view-header">
+                    <h2>Reports</h2>
+                    <div class="view-actions">
+                        <select id="reports-member-filter">
+                            <option value="all">All Members</option>
+                        </select>
+                        <select id="reports-period">
+                            <option value="today">Today</option>
+                            <option value="week" selected>This Week</option>
+                            <option value="month">This Month</option>
+                            <option value="all-time">All Time</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="reports-content" class="reports-content"></div>
             </div>
 
             <!-- Member Detail View (for checking off tasks) -->
@@ -184,6 +224,24 @@
             <div id="settings-modal" class="modal hidden">
                 <div class="modal-content">
                     <h3>Settings</h3>
+                    <div class="form-group">
+                        <label>Theme</label>
+                        <div class="theme-toggle">
+                            <button class="theme-btn" data-theme="light">Light</button>
+                            <button class="theme-btn" data-theme="dark">Dark</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Accent Color</label>
+                        <div id="accent-picker" class="color-picker">
+                            <span class="accent-swatch" data-accent="purple" style="background:linear-gradient(135deg,#667eea,#764ba2)"></span>
+                            <span class="accent-swatch" data-accent="blue" style="background:linear-gradient(135deg,#2196F3,#0D47A1)"></span>
+                            <span class="accent-swatch" data-accent="green" style="background:linear-gradient(135deg,#43A047,#1B5E20)"></span>
+                            <span class="accent-swatch" data-accent="orange" style="background:linear-gradient(135deg,#FF9800,#E65100)"></span>
+                            <span class="accent-swatch" data-accent="red" style="background:linear-gradient(135deg,#EF5350,#B71C1C)"></span>
+                            <span class="accent-swatch" data-accent="teal" style="background:linear-gradient(135deg,#26A69A,#004D40)"></span>
+                        </div>
+                    </div>
                     <div class="form-group">
                         <label>Gist ID</label>
                         <input type="text" id="settings-gist-id" readonly>

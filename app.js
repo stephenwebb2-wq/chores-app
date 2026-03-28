@@ -100,13 +100,42 @@ const App = (() => {
     function getTasksForMemberOnDate(memberId, date) {
         const dow = dayOfWeek(date);
         const dom = dayOfMonth(date);
-        return state.schedules.filter(s => {
-            if (s.memberId !== memberId) return false;
-            if (s.frequency === 'daily') return true;
-            if (s.frequency === 'weekly') return s.days.includes(dow);
-            if (s.frequency === 'monthly') return s.days.includes(dom);
-            return false;
+        const results = [];
+        state.schedules.forEach(s => {
+            if (s.memberId !== memberId) return;
+            let applies = false;
+            if (s.frequency === 'daily') applies = true;
+            else if (s.frequency === 'weekly') applies = s.days.includes(dow);
+            else if (s.frequency === 'monthly') applies = s.days.includes(dom);
+            if (!applies) return;
+
+            // For daily tasks with multiple time-of-day slots, expand into separate entries
+            if (s.frequency === 'daily' && s.timeOfDay && s.timeOfDay.length > 1) {
+                s.timeOfDay.forEach(tod => {
+                    results.push({
+                        ...s,
+                        _tod: tod,
+                        _compositeId: `${s.id}_${tod}` // Unique ID per time slot
+                    });
+                });
+            } else {
+                results.push({
+                    ...s,
+                    _tod: s.timeOfDay?.[0] || null,
+                    _compositeId: s.id
+                });
+            }
         });
+
+        // Sort by time of day: morning first, then afternoon, then evening, then unset
+        const todOrder = { morning: 0, afternoon: 1, evening: 2 };
+        results.sort((a, b) => {
+            const aOrd = a._tod ? (todOrder[a._tod] ?? 3) : 3;
+            const bOrd = b._tod ? (todOrder[b._tod] ?? 3) : 3;
+            return aOrd - bOrd;
+        });
+
+        return results;
     }
 
     // Completion entry format:
@@ -136,23 +165,64 @@ const App = (() => {
         return !!(c.startedAt && !c.finishedAt);
     }
 
+    // Completion entry now supports:
+    //   startedAt, finishedAt, actualMin (as before)
+    //   pausedAt - timestamp when paused (null if running)
+    //   pausedTotal - cumulative ms spent paused
+
     function startTask(scheduleId, date) {
         if (!state.completions[date]) state.completions[date] = {};
         state.completions[date][scheduleId] = {
             startedAt: Date.now(),
             finishedAt: null,
-            actualMin: null
+            actualMin: null,
+            pausedAt: null,
+            pausedTotal: 0
         };
         gist.save();
+    }
+
+    function pauseTask(scheduleId, date) {
+        const entry = state.completions[date]?.[scheduleId];
+        if (!entry || !entry.startedAt || entry.finishedAt) return;
+        if (entry.pausedAt) return; // already paused
+        entry.pausedAt = Date.now();
+        gist.save();
+    }
+
+    function resumeTask(scheduleId, date) {
+        const entry = state.completions[date]?.[scheduleId];
+        if (!entry || !entry.pausedAt) return;
+        entry.pausedTotal = (entry.pausedTotal || 0) + (Date.now() - entry.pausedAt);
+        entry.pausedAt = null;
+        gist.save();
+    }
+
+    function isPaused(scheduleId, date) {
+        const c = getCompletion(scheduleId, date);
+        return !!(c?.startedAt && !c?.finishedAt && c?.pausedAt);
+    }
+
+    function getActiveElapsed(entry) {
+        if (!entry || !entry.startedAt) return 0;
+        const now = entry.finishedAt || Date.now();
+        const totalMs = now - entry.startedAt;
+        const pausedMs = (entry.pausedTotal || 0) + (entry.pausedAt ? (Date.now() - entry.pausedAt) : 0);
+        return totalMs - pausedMs;
     }
 
     function finishTask(scheduleId, date) {
         const entry = state.completions[date]?.[scheduleId];
         if (!entry || !entry.startedAt) return;
+        // If paused, resume first to account for final pause time
+        if (entry.pausedAt) {
+            entry.pausedTotal = (entry.pausedTotal || 0) + (Date.now() - entry.pausedAt);
+            entry.pausedAt = null;
+        }
         const now = Date.now();
-        const elapsed = Math.round((now - entry.startedAt) / 60000 * 10) / 10; // minutes, 1 decimal
+        const activeMs = now - entry.startedAt - (entry.pausedTotal || 0);
         entry.finishedAt = now;
-        entry.actualMin = elapsed;
+        entry.actualMin = Math.round(activeMs / 60000 * 10) / 10;
         gist.save();
     }
 
@@ -268,6 +338,7 @@ const App = (() => {
         initFamily();
         initTasks();
         initSchedule();
+        initReports();
         initSettings();
         renderDashboard();
     }
@@ -281,6 +352,7 @@ const App = (() => {
                 if (view === 'family') renderFamily();
                 if (view === 'tasks') renderTasks();
                 if (view === 'schedule') renderSchedule();
+                if (view === 'reports') renderReports();
             });
         });
     }
@@ -304,22 +376,23 @@ const App = (() => {
 
         container.innerHTML = state.family.map(member => {
             const memberSchedules = getTasksForMemberOnDate(member.id, d);
-            const completed = memberSchedules.filter(s => isCompleted(s.id, d)).length;
-            const inProgress = memberSchedules.filter(s => isInProgress(s.id, d)).length;
+            const cid = s => s._compositeId || s.id;
+            const completed = memberSchedules.filter(s => isCompleted(cid(s), d)).length;
+            const inProgress = memberSchedules.filter(s => isInProgress(cid(s), d)).length;
             const total = memberSchedules.length;
             const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
             const color = member.color || '#4A90D9';
 
             // Calculate time tracked today
             const timeTracked = memberSchedules.reduce((sum, s) => {
-                const c = getCompletion(s.id, d);
+                const c = getCompletion(cid(s), d);
                 return sum + (c?.actualMin || 0);
             }, 0);
 
             const previewItems = memberSchedules.slice(0, 3).map(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
-                const done = isCompleted(s.id, d);
-                const prog = isInProgress(s.id, d);
+                const done = isCompleted(cid(s), d);
+                const prog = isInProgress(cid(s), d);
                 const icon = done ? '✓' : prog ? '◉' : '○';
                 return `<div class="task-preview-item ${done ? 'done' : ''} ${prog ? 'in-prog' : ''}">
                     <span class="check">${icon}</span>
@@ -370,7 +443,7 @@ const App = (() => {
             weekDates.forEach(date => {
                 const schedules = getTasksForMemberOnDate(member.id, date);
                 weekTotal += schedules.length;
-                weekDone += schedules.filter(s => isCompleted(s.id, date)).length;
+                weekDone += schedules.filter(s => isCompleted(s._compositeId || s.id, date)).length;
             });
             const pct = weekTotal > 0 ? Math.round((weekDone / weekTotal) * 100) : 0;
             return `<div class="weekly-row">
@@ -422,15 +495,18 @@ const App = (() => {
             return;
         }
 
+        // Helper for composite IDs (daily tasks with multiple time slots)
+        const cid = s => s._compositeId || s.id;
+
         // Calculate summary
         const totalTasks = schedules.length;
-        const doneTasks = schedules.filter(s => isCompleted(s.id, d)).length;
+        const doneTasks = schedules.filter(s => isCompleted(cid(s), d)).length;
         const totalEstMin = schedules.reduce((sum, s) => {
             const task = state.tasks.find(t => t.id === s.taskId);
             return sum + (task?.durationMin || 0);
         }, 0);
         const totalActualMin = schedules.reduce((sum, s) => {
-            const c = getCompletion(s.id, d);
+            const c = getCompletion(cid(s), d);
             return sum + (c?.actualMin || 0);
         }, 0);
 
@@ -450,36 +526,51 @@ const App = (() => {
         </div>`;
 
         html += schedules.map(s => {
+            const sid = cid(s);
             const task = state.tasks.find(t => t.id === s.taskId);
-            const done = isCompleted(s.id, d);
-            const inProg = isInProgress(s.id, d);
-            const comp = getCompletion(s.id, d);
+            const done = isCompleted(sid, d);
+            const inProg = isInProgress(sid, d);
+            const comp = getCompletion(sid, d);
             const estDur = task?.durationMin ? `Est: ${task.durationMin} min` : '';
+            const todLabel = s._tod ? s._tod.charAt(0).toUpperCase() + s._tod.slice(1) : '';
 
             let statusClass = '';
             let timerHtml = '';
             let actionsHtml = '';
 
+            const paused = isPaused(sid, d);
+
             if (done) {
                 statusClass = 'completed';
                 const actualTime = comp?.actualMin != null ? `${Math.round(comp.actualMin * 10) / 10} min` : '';
                 timerHtml = actualTime ? `<span class="task-actual-time">${actualTime}</span>` : '';
-                actionsHtml = `<button class="btn btn-task btn-reset" data-schedule="${s.id}">Reset</button>`;
-            } else if (inProg) {
-                statusClass = 'in-progress';
-                timerHtml = `<span class="task-timer" data-started="${comp.startedAt}">0:00</span>`;
-                actionsHtml = `<button class="btn btn-task btn-finish" data-schedule="${s.id}">Finish</button>`;
+                actionsHtml = `<button class="btn btn-task btn-reset" data-schedule="${sid}">Reset</button>`;
+            } else if (inProg || paused) {
+                statusClass = paused ? 'in-progress' : 'in-progress';
+                const elapsed = getActiveElapsed(comp);
+                timerHtml = `<span class="task-timer ${paused ? 'paused' : ''}" data-schedule-id="${sid}">${formatElapsed(elapsed)}</span>`;
+                if (paused) {
+                    actionsHtml = `
+                        <button class="btn btn-task btn-resume" data-schedule="${sid}">Resume</button>
+                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>`;
+                } else {
+                    actionsHtml = `
+                        <button class="btn btn-task btn-pause" data-schedule="${sid}">Pause</button>
+                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>`;
+                }
             } else {
                 actionsHtml = `
-                    <button class="btn btn-task btn-start" data-schedule="${s.id}">Start</button>
-                    <button class="btn btn-task btn-done" data-schedule="${s.id}" title="Complete without timing">✓</button>`;
+                    <button class="btn btn-task btn-start" data-schedule="${sid}">Start</button>
+                    <button class="btn btn-task btn-done" data-schedule="${sid}" title="Complete without timing">✓</button>`;
             }
 
-            return `<div class="member-task-item ${statusClass}" data-schedule="${s.id}">
+            const todBadge = todLabel ? `<span class="tod-badge tod-${s._tod}">${todLabel}</span>` : '';
+
+            return `<div class="member-task-item ${statusClass}" data-schedule="${sid}">
                 <div class="task-left">
                     <div class="checkbox">${done ? '✓' : inProg ? '◉' : ''}</div>
                     <div class="task-details">
-                        <span class="task-label">${task ? task.name : 'Unknown'}</span>
+                        <span class="task-label">${todBadge}${task ? task.name : 'Unknown'}</span>
                         <span class="task-sub">${estDur}${estDur && s.frequency ? ' · ' : ''}${s.frequency}</span>
                     </div>
                 </div>
@@ -519,6 +610,24 @@ const App = (() => {
             });
         });
 
+        // Pause button handlers
+        $('member-tasks').querySelectorAll('.btn-pause').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                pauseTask(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
+        // Resume button handlers
+        $('member-tasks').querySelectorAll('.btn-resume').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resumeTask(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
         // Reset button handlers
         $('member-tasks').querySelectorAll('.btn-reset').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -528,14 +637,17 @@ const App = (() => {
             });
         });
 
-        // Live timer update
-        const hasActiveTimers = schedules.some(s => isInProgress(s.id, d));
+        // Live timer update (only for non-paused timers)
+        const hasActiveTimers = schedules.some(s => isInProgress(cid(s), d) && !isPaused(cid(s), d));
         if (hasActiveTimers) {
             timerInterval = setInterval(() => {
-                document.querySelectorAll('.task-timer').forEach(el => {
-                    const started = parseInt(el.dataset.started);
-                    if (started) {
-                        el.textContent = formatElapsed(Date.now() - started);
+                document.querySelectorAll('.task-timer:not(.paused)').forEach(el => {
+                    const schedId = el.dataset.scheduleId;
+                    if (schedId) {
+                        const comp = getCompletion(schedId, d);
+                        if (comp && comp.startedAt && !comp.pausedAt) {
+                            el.textContent = formatElapsed(getActiveElapsed(comp));
+                        }
                     }
                 });
             }, 1000);
@@ -650,6 +762,8 @@ const App = (() => {
         $('cancel-task-btn').addEventListener('click', () => {
             $('task-modal').classList.add('hidden');
         });
+
+        $('tasks-filter').addEventListener('change', renderTasks);
 
         $('save-task-btn').addEventListener('click', async () => {
             const name = $('task-name').value.trim();
@@ -872,25 +986,78 @@ const App = (() => {
         return 'other';
     }
 
+    function getTaskScheduleStatus(taskId) {
+        const schedules = state.schedules.filter(s => s.taskId === taskId);
+        if (schedules.length === 0) return 'unscheduled';
+        // Check if any weekly/monthly schedule has no days picked
+        const needsDays = schedules.some(s =>
+            (s.frequency === 'weekly' || s.frequency === 'monthly') && (!s.days || s.days.length === 0)
+        );
+        if (needsDays) return 'no-days';
+        return 'scheduled';
+    }
+
     function renderTasks() {
+        const filterVal = $('tasks-filter')?.value || 'all';
+
         if (state.tasks.length === 0) {
             $('tasks-list').innerHTML = '<div class="empty-state"><p>No tasks yet. Add tasks manually or import from a spreadsheet!</p></div>';
+            $('tasks-filter-info').classList.add('hidden');
             return;
         }
 
-        $('tasks-list').innerHTML = state.tasks.map(t => `
-            <div class="task-item">
+        // Filter tasks
+        let filtered = state.tasks;
+        if (filterVal === 'unscheduled') {
+            filtered = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'unscheduled');
+        } else if (filterVal === 'no-days') {
+            filtered = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'no-days');
+        } else if (['cleaning', 'kitchen', 'laundry', 'outdoor', 'pets', 'other'].includes(filterVal)) {
+            filtered = state.tasks.filter(t => t.category === filterVal);
+        }
+
+        // Show filter info
+        const info = $('tasks-filter-info');
+        if (filterVal !== 'all') {
+            const total = state.tasks.length;
+            info.textContent = `Showing ${filtered.length} of ${total} tasks`;
+            info.classList.remove('hidden');
+        } else {
+            info.classList.add('hidden');
+        }
+
+        if (filtered.length === 0) {
+            $('tasks-list').innerHTML = `<div class="empty-state"><p>No tasks match this filter.</p></div>`;
+            return;
+        }
+
+        $('tasks-list').innerHTML = filtered.map(t => {
+            const status = getTaskScheduleStatus(t.id);
+            const statusBadge = status === 'unscheduled'
+                ? '<span class="status-badge status-unscheduled">Unscheduled</span>'
+                : status === 'no-days'
+                ? '<span class="status-badge status-nodays">Needs Days</span>'
+                : '';
+            const assignees = state.schedules
+                .filter(s => s.taskId === t.id)
+                .map(s => state.family.find(m => m.id === s.memberId)?.name)
+                .filter(Boolean);
+            const assigneeText = assignees.length > 0 ? assignees.join(', ') : '';
+
+            return `<div class="task-item">
                 <div class="task-info">
                     <span class="task-category-badge cat-${t.category}">${t.category}</span>
                     <span>${t.name}</span>
                     ${t.durationMin ? `<span class="task-duration">${t.durationMin} min</span>` : ''}
+                    ${statusBadge}
+                    ${assigneeText ? `<span class="task-assignee">${assigneeText}</span>` : ''}
                 </div>
                 <div class="task-actions">
                     <button class="btn btn-small edit-task" data-id="${t.id}">Edit</button>
                     <button class="btn btn-small delete-task" data-id="${t.id}" style="color:var(--danger)">Delete</button>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
 
         $$('.edit-task').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -919,10 +1086,27 @@ const App = (() => {
 
     // --- Schedule ---
     let selectedDays = [];
+    let selectedTimeOfDay = [];
     let editingScheduleId = null;
 
     function initSchedule() {
-        $('assign-frequency').addEventListener('change', renderDayPicker);
+        $('assign-frequency').addEventListener('change', () => {
+            renderDayPicker();
+            renderTimeOfDayPicker();
+        });
+
+        // Time of day toggle handlers
+        $$('#time-of-day-options .day-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const tod = opt.dataset.tod;
+                if (selectedTimeOfDay.includes(tod)) {
+                    selectedTimeOfDay = selectedTimeOfDay.filter(t => t !== tod);
+                } else {
+                    selectedTimeOfDay.push(tod);
+                }
+                opt.classList.toggle('selected');
+            });
+        });
 
         $('cancel-assign-btn').addEventListener('click', () => {
             $('assign-modal').classList.add('hidden');
@@ -935,6 +1119,8 @@ const App = (() => {
 
             if (!taskId || !memberId) return;
 
+            const timeOfDay = frequency === 'daily' ? [...selectedTimeOfDay] : [];
+
             if (editingScheduleId) {
                 const schedule = state.schedules.find(s => s.id === editingScheduleId);
                 if (schedule) {
@@ -942,6 +1128,7 @@ const App = (() => {
                     schedule.memberId = memberId;
                     schedule.frequency = frequency;
                     schedule.days = [...selectedDays];
+                    schedule.timeOfDay = timeOfDay;
                 }
             } else {
                 state.schedules.push({
@@ -949,7 +1136,8 @@ const App = (() => {
                     taskId,
                     memberId,
                     frequency,
-                    days: [...selectedDays]
+                    days: [...selectedDays],
+                    timeOfDay
                 });
             }
             await gist.save();
@@ -974,14 +1162,30 @@ const App = (() => {
 
         if (scheduleToEdit) {
             $('assign-frequency').value = scheduleToEdit.frequency;
-            selectedDays = [...scheduleToEdit.days];
+            selectedDays = [...(scheduleToEdit.days || [])];
+            selectedTimeOfDay = [...(scheduleToEdit.timeOfDay || [])];
         } else {
             $('assign-frequency').value = 'weekly';
             selectedDays = [];
+            selectedTimeOfDay = [];
         }
 
         renderDayPicker();
+        renderTimeOfDayPicker();
         $('assign-modal').classList.remove('hidden');
+    }
+
+    function renderTimeOfDayPicker() {
+        const freq = $('assign-frequency').value;
+        const picker = $('time-of-day-picker');
+        if (freq === 'daily') {
+            picker.classList.remove('hidden');
+            $$('#time-of-day-options .day-option').forEach(opt => {
+                opt.classList.toggle('selected', selectedTimeOfDay.includes(opt.dataset.tod));
+            });
+        } else {
+            picker.classList.add('hidden');
+        }
     }
 
     function renderDayPicker() {
@@ -1115,15 +1319,361 @@ const App = (() => {
         return s[(v - 20) % 10] || s[v] || s[0];
     }
 
+    // --- Reports ---
+    function initReports() {
+        $('reports-member-filter').addEventListener('change', renderReports);
+        $('reports-period').addEventListener('change', renderReports);
+    }
+
+    function getDateRange(period) {
+        const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
+
+        if (period === 'today') {
+            return [todayStr, todayStr];
+        }
+        if (period === 'week') {
+            const start = new Date(now);
+            start.setDate(now.getDate() - now.getDay());
+            const end = new Date(start);
+            end.setDate(start.getDate() + 6);
+            return [start.toISOString().split('T')[0], end.toISOString().split('T')[0]];
+        }
+        if (period === 'month') {
+            const start = new Date(now.getFullYear(), now.getMonth(), 1);
+            const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            return [start.toISOString().split('T')[0], end.toISOString().split('T')[0]];
+        }
+        // all-time: scan all dates in completions
+        const dates = Object.keys(state.completions).sort();
+        if (dates.length === 0) return [todayStr, todayStr];
+        return [dates[0], todayStr];
+    }
+
+    function getDatesInRange(start, end) {
+        const dates = [];
+        const current = new Date(start + 'T00:00:00');
+        const endDate = new Date(end + 'T00:00:00');
+        while (current <= endDate) {
+            dates.push(current.toISOString().split('T')[0]);
+            current.setDate(current.getDate() + 1);
+        }
+        return dates;
+    }
+
+    function renderReports() {
+        // Update filter dropdown
+        const memberFilter = $('reports-member-filter');
+        const currentMember = memberFilter.value;
+        memberFilter.innerHTML = '<option value="all">All Members</option>' +
+            state.family.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+        memberFilter.value = currentMember;
+
+        const period = $('reports-period').value;
+        const [startDate, endDate] = getDateRange(period);
+        const dates = getDatesInRange(startDate, endDate);
+
+        const members = currentMember === 'all'
+            ? state.family
+            : state.family.filter(m => m.id === currentMember);
+
+        if (members.length === 0) {
+            $('reports-content').innerHTML = '<div class="empty-state"><p>No family members to report on.</p></div>';
+            return;
+        }
+
+        let html = '';
+
+        // ===== 1. Overview Cards =====
+        html += '<div class="report-section"><h3>Overview</h3><div class="report-cards">';
+        members.forEach(member => {
+            const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
+            let totalAssigned = 0;
+            let totalCompleted = 0;
+            let totalEstMin = 0;
+            let totalActualMin = 0;
+
+            dates.forEach(date => {
+                const daySchedules = getTasksForMemberOnDate(member.id, date);
+                totalAssigned += daySchedules.length;
+                daySchedules.forEach(s => {
+                    if (isCompleted(s.id, date)) {
+                        totalCompleted++;
+                        const c = getCompletion(s.id, date);
+                        if (c?.actualMin) totalActualMin += c.actualMin;
+                    }
+                    const task = state.tasks.find(t => t.id === s.taskId);
+                    if (task?.durationMin) totalEstMin += task.durationMin;
+                });
+            });
+
+            const pct = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
+            const estHrs = Math.round(totalEstMin / 60 * 10) / 10;
+            const actHrs = Math.round(totalActualMin / 60 * 10) / 10;
+            const timeDiff = totalActualMin > 0 && totalEstMin > 0
+                ? Math.round(totalActualMin - totalEstMin) : null;
+            const timeDiffText = timeDiff !== null
+                ? (timeDiff > 0 ? `+${timeDiff} min over` : `${Math.abs(timeDiff)} min under`)
+                : '';
+            const timeDiffClass = timeDiff !== null
+                ? (timeDiff > 0 ? 'over' : 'under') : '';
+
+            html += `<div class="report-card">
+                <div class="report-card-header">
+                    <div class="avatar" style="background:${member.color}">${getInitials(member.name)}</div>
+                    <h4>${member.name}</h4>
+                </div>
+                <div class="report-stats">
+                    <div class="report-stat">
+                        <span class="stat-value">${totalAssigned}</span>
+                        <span class="stat-label">Assigned</span>
+                    </div>
+                    <div class="report-stat">
+                        <span class="stat-value">${totalCompleted}</span>
+                        <span class="stat-label">Completed</span>
+                    </div>
+                    <div class="report-stat">
+                        <span class="stat-value">${pct}%</span>
+                        <span class="stat-label">Rate</span>
+                    </div>
+                    <div class="report-stat">
+                        <span class="stat-value">${estHrs}h</span>
+                        <span class="stat-label">Est. Time</span>
+                    </div>
+                    <div class="report-stat">
+                        <span class="stat-value">${actHrs}h</span>
+                        <span class="stat-label">Actual Time</span>
+                    </div>
+                </div>
+                ${timeDiffText ? `<div class="time-diff ${timeDiffClass}">${timeDiffText} estimate</div>` : ''}
+                <div class="progress-bar" style="margin-top:10px">
+                    <div class="progress-fill" style="width:${pct}%;background:${member.color}"></div>
+                </div>
+            </div>`;
+        });
+        html += '</div></div>';
+
+        // ===== 2. Task Frequency Tracker (weekly tasks with multiple completions) =====
+        html += '<div class="report-section"><h3>Weekly Task Tracker</h3>';
+        html += '<p class="report-desc">Track progress on recurring tasks — shows completions and time this week vs. expected.</p>';
+
+        // Get this week's dates regardless of period filter
+        const now = new Date();
+        const weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - now.getDay());
+        const weekDates = [];
+        for (let i = 0; i < 7; i++) {
+            const wd = new Date(weekStart);
+            wd.setDate(weekStart.getDate() + i);
+            weekDates.push(wd.toISOString().split('T')[0]);
+        }
+
+        members.forEach(member => {
+            const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
+            if (memberSchedules.length === 0) return;
+
+            // Group by task to aggregate across frequencies
+            const taskMap = new Map();
+            memberSchedules.forEach(s => {
+                const task = state.tasks.find(t => t.id === s.taskId);
+                if (!task) return;
+
+                if (!taskMap.has(task.id)) {
+                    taskMap.set(task.id, {
+                        task,
+                        schedules: [],
+                        expectedPerWeek: 0,
+                        estMinPerOccurrence: task.durationMin || 0
+                    });
+                }
+                const entry = taskMap.get(task.id);
+                entry.schedules.push(s);
+
+                // Calculate expected occurrences per week
+                if (s.frequency === 'daily') {
+                    entry.expectedPerWeek += 7;
+                } else if (s.frequency === 'weekly') {
+                    entry.expectedPerWeek += Math.max(s.days?.length || 1, 1);
+                } else if (s.frequency === 'monthly') {
+                    // Roughly 1 per month = ~0.25 per week
+                    entry.expectedPerWeek += (s.days?.length || 1) * 0.25;
+                }
+            });
+
+            html += `<div class="report-member-block">
+                <h4 style="color:${member.color}">${member.name}</h4>
+                <div class="freq-table">
+                    <div class="freq-header">
+                        <span class="freq-col-task">Task</span>
+                        <span class="freq-col">Done</span>
+                        <span class="freq-col">Expected</span>
+                        <span class="freq-col">Time Used</span>
+                        <span class="freq-col">Est. Time</span>
+                        <span class="freq-col">Progress</span>
+                    </div>`;
+
+            taskMap.forEach(({ task, schedules, expectedPerWeek, estMinPerOccurrence }) => {
+                // Count completions this week
+                let weekCompletions = 0;
+                let weekActualMin = 0;
+
+                weekDates.forEach(date => {
+                    schedules.forEach(s => {
+                        // Check if this schedule applies on this date
+                        const dow = dayOfWeek(date);
+                        const dom = dayOfMonth(date);
+                        let applies = false;
+                        if (s.frequency === 'daily') applies = true;
+                        else if (s.frequency === 'weekly') applies = s.days.includes(dow);
+                        else if (s.frequency === 'monthly') applies = s.days.includes(dom);
+
+                        if (applies && isCompleted(s.id, date)) {
+                            weekCompletions++;
+                            const c = getCompletion(s.id, date);
+                            if (c?.actualMin) weekActualMin += c.actualMin;
+                        }
+                    });
+                });
+
+                const expectedRounded = Math.round(expectedPerWeek * 10) / 10;
+                const totalEstMin = Math.round(expectedPerWeek * estMinPerOccurrence);
+                const pct = expectedPerWeek > 0 ? Math.min(100, Math.round((weekCompletions / expectedPerWeek) * 100)) : 0;
+                const actualFormatted = weekActualMin > 0 ? `${Math.round(weekActualMin)} min` : '-';
+                const estFormatted = totalEstMin > 0 ? `${totalEstMin} min` : '-';
+
+                const barColor = pct >= 100 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : member.color;
+
+                html += `<div class="freq-row">
+                    <span class="freq-col-task">${task.name}</span>
+                    <span class="freq-col">${weekCompletions}</span>
+                    <span class="freq-col">${expectedRounded}</span>
+                    <span class="freq-col">${actualFormatted}</span>
+                    <span class="freq-col">${estFormatted}</span>
+                    <span class="freq-col">
+                        <div class="mini-bar"><div class="mini-fill" style="width:${pct}%;background:${barColor}"></div></div>
+                        <span class="mini-pct">${pct}%</span>
+                    </span>
+                </div>`;
+            });
+
+            html += '</div></div>';
+        });
+        html += '</div>';
+
+        // ===== 3. Category Breakdown =====
+        html += '<div class="report-section"><h3>Time by Category</h3>';
+        html += '<div class="category-breakdown">';
+
+        const catTotals = {};
+        dates.forEach(date => {
+            members.forEach(member => {
+                const daySchedules = getTasksForMemberOnDate(member.id, date);
+                daySchedules.forEach(s => {
+                    const task = state.tasks.find(t => t.id === s.taskId);
+                    if (!task) return;
+                    const cat = task.category || 'other';
+                    if (!catTotals[cat]) catTotals[cat] = { est: 0, actual: 0, count: 0, completed: 0 };
+                    catTotals[cat].count++;
+                    catTotals[cat].est += task.durationMin || 0;
+                    if (isCompleted(s.id, date)) {
+                        catTotals[cat].completed++;
+                        const c = getCompletion(s.id, date);
+                        if (c?.actualMin) catTotals[cat].actual += c.actualMin;
+                    }
+                });
+            });
+        });
+
+        const maxEst = Math.max(...Object.values(catTotals).map(c => c.est), 1);
+        for (const [cat, data] of Object.entries(catTotals)) {
+            const barWidth = Math.round((data.est / maxEst) * 100);
+            html += `<div class="cat-row">
+                <span class="task-category-badge cat-${cat}">${cat}</span>
+                <div class="cat-bar-wrap">
+                    <div class="cat-bar" style="width:${barWidth}%">
+                        <span class="cat-bar-label">${Math.round(data.est)} min est</span>
+                    </div>
+                    ${data.actual > 0 ? `<div class="cat-bar actual" style="width:${Math.round((data.actual / maxEst) * 100)}%">
+                        <span class="cat-bar-label">${Math.round(data.actual)} min actual</span>
+                    </div>` : ''}
+                </div>
+                <span class="cat-stats">${data.completed}/${data.count}</span>
+            </div>`;
+        }
+        html += '</div></div>';
+
+        $('reports-content').innerHTML = html;
+    }
+
     // --- Settings ---
+    // --- Theme & Accent ---
+    const accentSchemes = {
+        purple: { primary: '#6366F1', gradient: 'linear-gradient(135deg, #667eea, #764ba2)' },
+        blue:   { primary: '#2196F3', gradient: 'linear-gradient(135deg, #2196F3, #0D47A1)' },
+        green:  { primary: '#43A047', gradient: 'linear-gradient(135deg, #43A047, #1B5E20)' },
+        orange: { primary: '#FF9800', gradient: 'linear-gradient(135deg, #FF9800, #E65100)' },
+        red:    { primary: '#EF5350', gradient: 'linear-gradient(135deg, #EF5350, #B71C1C)' },
+        teal:   { primary: '#26A69A', gradient: 'linear-gradient(135deg, #26A69A, #004D40)' },
+    };
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('chores_theme', theme);
+        $$('.theme-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.theme === theme);
+        });
+    }
+
+    function applyAccent(accent) {
+        const scheme = accentSchemes[accent];
+        if (!scheme) return;
+        document.documentElement.style.setProperty('--primary', scheme.primary);
+        // Update gradient buttons
+        const style = document.getElementById('accent-style') || document.createElement('style');
+        style.id = 'accent-style';
+        style.textContent = `
+            .btn-primary { background: ${scheme.gradient} !important; }
+            .setup-container h1, header h1 { background: ${scheme.gradient} !important; -webkit-background-clip: text !important; background-clip: text !important; }
+            .btn-start, .btn-resume { background: ${scheme.gradient} !important; }
+            #setup-screen { background: ${scheme.gradient} !important; }
+        `;
+        document.head.appendChild(style);
+        localStorage.setItem('chores_accent', accent);
+        $$('.accent-swatch').forEach(s => {
+            s.classList.toggle('selected', s.dataset.accent === accent);
+        });
+    }
+
+    function loadThemePrefs() {
+        const theme = localStorage.getItem('chores_theme') || 'light';
+        const accent = localStorage.getItem('chores_accent') || 'purple';
+        applyTheme(theme);
+        applyAccent(accent);
+    }
+
     function initSettings() {
         $('settings-btn').addEventListener('click', () => {
             $('settings-gist-id').value = state.gistId;
+            // Sync active states
+            const currentTheme = localStorage.getItem('chores_theme') || 'light';
+            $$('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === currentTheme));
+            const currentAccent = localStorage.getItem('chores_accent') || 'purple';
+            $$('.accent-swatch').forEach(s => s.classList.toggle('selected', s.dataset.accent === currentAccent));
             $('settings-modal').classList.remove('hidden');
         });
 
         $('close-settings-btn').addEventListener('click', () => {
             $('settings-modal').classList.add('hidden');
+        });
+
+        // Theme toggle
+        $$('.theme-btn').forEach(btn => {
+            btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
+        });
+
+        // Accent color
+        $$('.accent-swatch').forEach(swatch => {
+            swatch.addEventListener('click', () => applyAccent(swatch.dataset.accent));
         });
 
         $('copy-gist-id').addEventListener('click', () => {
@@ -1145,5 +1695,6 @@ const App = (() => {
     }
 
     // --- Boot ---
+    loadThemePrefs(); // Apply theme immediately, before DOMContentLoaded
     document.addEventListener('DOMContentLoaded', initSetup);
 })();
