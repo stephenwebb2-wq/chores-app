@@ -109,18 +109,79 @@ const App = (() => {
         });
     }
 
+    // Completion entry format:
+    // Legacy: true (simple check-off)
+    // New:    { startedAt, finishedAt, actualMin }
+    //   - startedAt only = in progress
+    //   - startedAt + finishedAt = completed with time tracked
+    //   - { completed: true } = completed without timing (manual check-off)
+
+    function getCompletion(scheduleId, date) {
+        const entry = state.completions[date]?.[scheduleId];
+        if (!entry) return null;
+        if (entry === true) return { completed: true }; // legacy
+        return entry;
+    }
+
     function isCompleted(scheduleId, date) {
-        return !!(state.completions[date] && state.completions[date][scheduleId]);
+        const c = getCompletion(scheduleId, date);
+        if (!c) return false;
+        if (c === true || c.completed) return true;
+        return !!(c.finishedAt);
+    }
+
+    function isInProgress(scheduleId, date) {
+        const c = getCompletion(scheduleId, date);
+        if (!c) return false;
+        return !!(c.startedAt && !c.finishedAt);
+    }
+
+    function startTask(scheduleId, date) {
+        if (!state.completions[date]) state.completions[date] = {};
+        state.completions[date][scheduleId] = {
+            startedAt: Date.now(),
+            finishedAt: null,
+            actualMin: null
+        };
+        gist.save();
+    }
+
+    function finishTask(scheduleId, date) {
+        const entry = state.completions[date]?.[scheduleId];
+        if (!entry || !entry.startedAt) return;
+        const now = Date.now();
+        const elapsed = Math.round((now - entry.startedAt) / 60000 * 10) / 10; // minutes, 1 decimal
+        entry.finishedAt = now;
+        entry.actualMin = elapsed;
+        gist.save();
+    }
+
+    function resetTask(scheduleId, date) {
+        if (state.completions[date]) {
+            delete state.completions[date][scheduleId];
+        }
+        gist.save();
     }
 
     function toggleCompletion(scheduleId, date) {
+        // Quick complete without timing (for legacy / simple check-off)
         if (!state.completions[date]) state.completions[date] = {};
         if (state.completions[date][scheduleId]) {
             delete state.completions[date][scheduleId];
         } else {
-            state.completions[date][scheduleId] = true;
+            state.completions[date][scheduleId] = { completed: true };
         }
         gist.save();
+    }
+
+    function formatElapsed(ms) {
+        const totalSec = Math.floor(ms / 1000);
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        if (h > 0) return `${h}h ${m}m ${s}s`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
     }
 
     function getInitials(name) {
@@ -244,18 +305,30 @@ const App = (() => {
         container.innerHTML = state.family.map(member => {
             const memberSchedules = getTasksForMemberOnDate(member.id, d);
             const completed = memberSchedules.filter(s => isCompleted(s.id, d)).length;
+            const inProgress = memberSchedules.filter(s => isInProgress(s.id, d)).length;
             const total = memberSchedules.length;
             const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
             const color = member.color || '#4A90D9';
 
+            // Calculate time tracked today
+            const timeTracked = memberSchedules.reduce((sum, s) => {
+                const c = getCompletion(s.id, d);
+                return sum + (c?.actualMin || 0);
+            }, 0);
+
             const previewItems = memberSchedules.slice(0, 3).map(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
                 const done = isCompleted(s.id, d);
-                return `<div class="task-preview-item ${done ? 'done' : ''}">
-                    <span class="check">${done ? '✓' : '○'}</span>
+                const prog = isInProgress(s.id, d);
+                const icon = done ? '✓' : prog ? '◉' : '○';
+                return `<div class="task-preview-item ${done ? 'done' : ''} ${prog ? 'in-prog' : ''}">
+                    <span class="check">${icon}</span>
                     <span>${task ? task.name : 'Unknown task'}</span>
                 </div>`;
             }).join('');
+
+            const timeText = timeTracked > 0 ? ` · ${Math.round(timeTracked)} min tracked` : '';
+            const progText = inProgress > 0 ? ` · ${inProgress} in progress` : '';
 
             return `<div class="dashboard-card" data-member="${member.id}">
                 <div class="card-header">
@@ -265,7 +338,7 @@ const App = (() => {
                 <div class="progress-bar">
                     <div class="progress-fill" style="width:${pct}%;background:${color}"></div>
                 </div>
-                <div class="progress-text">${completed}/${total} tasks complete</div>
+                <div class="progress-text">${completed}/${total} tasks complete${progText}${timeText}</div>
                 <div class="task-preview">${previewItems}</div>
             </div>`;
         }).join('');
@@ -334,7 +407,13 @@ const App = (() => {
         };
     }
 
+    // Timer interval reference
+    let timerInterval = null;
+
     function renderMemberTasks(memberId) {
+        // Clear any existing timer interval
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+
         const d = today();
         const schedules = getTasksForMemberOnDate(memberId, d);
 
@@ -343,24 +422,124 @@ const App = (() => {
             return;
         }
 
-        $('member-tasks').innerHTML = schedules.map(s => {
+        // Calculate summary
+        const totalTasks = schedules.length;
+        const doneTasks = schedules.filter(s => isCompleted(s.id, d)).length;
+        const totalEstMin = schedules.reduce((sum, s) => {
+            const task = state.tasks.find(t => t.id === s.taskId);
+            return sum + (task?.durationMin || 0);
+        }, 0);
+        const totalActualMin = schedules.reduce((sum, s) => {
+            const c = getCompletion(s.id, d);
+            return sum + (c?.actualMin || 0);
+        }, 0);
+
+        let html = `<div class="member-summary">
+            <div class="summary-stat">
+                <span class="summary-number">${doneTasks}/${totalTasks}</span>
+                <span class="summary-label">Tasks Done</span>
+            </div>
+            ${totalEstMin > 0 ? `<div class="summary-stat">
+                <span class="summary-number">${Math.round(totalEstMin)}</span>
+                <span class="summary-label">Est. Minutes</span>
+            </div>` : ''}
+            ${totalActualMin > 0 ? `<div class="summary-stat">
+                <span class="summary-number">${Math.round(totalActualMin * 10) / 10}</span>
+                <span class="summary-label">Actual Minutes</span>
+            </div>` : ''}
+        </div>`;
+
+        html += schedules.map(s => {
             const task = state.tasks.find(t => t.id === s.taskId);
             const done = isCompleted(s.id, d);
-            const dur = task?.durationMin ? `${task.durationMin} min` : '';
-            return `<div class="member-task-item ${done ? 'completed' : ''}" data-schedule="${s.id}">
-                <div class="checkbox">${done ? '✓' : ''}</div>
-                <span class="task-label">${task ? task.name : 'Unknown'}</span>
-                ${dur ? `<span class="task-duration">${dur}</span>` : ''}
-                <span class="task-meta">${s.frequency}</span>
+            const inProg = isInProgress(s.id, d);
+            const comp = getCompletion(s.id, d);
+            const estDur = task?.durationMin ? `Est: ${task.durationMin} min` : '';
+
+            let statusClass = '';
+            let timerHtml = '';
+            let actionsHtml = '';
+
+            if (done) {
+                statusClass = 'completed';
+                const actualTime = comp?.actualMin != null ? `${Math.round(comp.actualMin * 10) / 10} min` : '';
+                timerHtml = actualTime ? `<span class="task-actual-time">${actualTime}</span>` : '';
+                actionsHtml = `<button class="btn btn-task btn-reset" data-schedule="${s.id}">Reset</button>`;
+            } else if (inProg) {
+                statusClass = 'in-progress';
+                timerHtml = `<span class="task-timer" data-started="${comp.startedAt}">0:00</span>`;
+                actionsHtml = `<button class="btn btn-task btn-finish" data-schedule="${s.id}">Finish</button>`;
+            } else {
+                actionsHtml = `
+                    <button class="btn btn-task btn-start" data-schedule="${s.id}">Start</button>
+                    <button class="btn btn-task btn-done" data-schedule="${s.id}" title="Complete without timing">✓</button>`;
+            }
+
+            return `<div class="member-task-item ${statusClass}" data-schedule="${s.id}">
+                <div class="task-left">
+                    <div class="checkbox">${done ? '✓' : inProg ? '◉' : ''}</div>
+                    <div class="task-details">
+                        <span class="task-label">${task ? task.name : 'Unknown'}</span>
+                        <span class="task-sub">${estDur}${estDur && s.frequency ? ' · ' : ''}${s.frequency}</span>
+                    </div>
+                </div>
+                <div class="task-right">
+                    ${timerHtml}
+                    <div class="task-btn-group">${actionsHtml}</div>
+                </div>
             </div>`;
         }).join('');
 
-        $('member-tasks').querySelectorAll('.member-task-item').forEach(item => {
-            item.addEventListener('click', () => {
-                toggleCompletion(item.dataset.schedule, d);
+        $('member-tasks').innerHTML = html;
+
+        // Start button handlers
+        $('member-tasks').querySelectorAll('.btn-start').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                startTask(btn.dataset.schedule, d);
                 renderMemberTasks(memberId);
             });
         });
+
+        // Finish button handlers
+        $('member-tasks').querySelectorAll('.btn-finish').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                finishTask(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
+        // Quick complete (checkmark) handlers
+        $('member-tasks').querySelectorAll('.btn-done').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleCompletion(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
+        // Reset button handlers
+        $('member-tasks').querySelectorAll('.btn-reset').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resetTask(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
+        // Live timer update
+        const hasActiveTimers = schedules.some(s => isInProgress(s.id, d));
+        if (hasActiveTimers) {
+            timerInterval = setInterval(() => {
+                document.querySelectorAll('.task-timer').forEach(el => {
+                    const started = parseInt(el.dataset.started);
+                    if (started) {
+                        el.textContent = formatElapsed(Date.now() - started);
+                    }
+                });
+            }, 1000);
+        }
     }
 
     // --- Family ---
