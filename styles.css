@@ -606,6 +606,19 @@ header nav {
     color: white;
 }
 
+.schedule-item-info .avatar,
+.recurring-row .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 0.65rem;
+    flex-shrink: 0;
+}
+
+.schedule-member-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
 .schedule-days {
     font-size: 0.83rem;
     color: var(--text-light);
@@ -814,6 +827,48 @@ header nav {
     padding: 3px 10px;
     border-radius: 8px;
     white-space: nowrap;
+}
+
+/* Manual Time Entry */
+.manual-time-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.manual-time-input {
+    width: 52px;
+    padding: 5px 6px;
+    border: 1.5px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    text-align: center;
+    background: #F8FAFC;
+    color: var(--text);
+    -moz-appearance: textfield;
+}
+
+.manual-time-input::-webkit-outer-spin-button,
+.manual-time-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.manual-time-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+}
+
+.manual-time-input::placeholder {
+    color: #94A3B8;
+    font-size: 0.75rem;
+}
+
+[data-theme="dark"] .manual-time-input {
+    background: #0F172A;
+    border-color: var(--border);
 }
 
 /* Task Action Buttons */

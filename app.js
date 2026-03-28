@@ -247,6 +247,11 @@ const App = (() => {
             entry.finishedAt = now;
             entry.actualMin = actualMin;
         }
+
+        // Update estimated time based on rolling average
+        const task = schedule ? state.tasks.find(t => t.id === schedule.taskId) : null;
+        if (task) updateEstimatedTime(task);
+
         gist.save();
     }
 
@@ -261,6 +266,39 @@ const App = (() => {
         if (schedule.frequency === 'recurring') return true;
         const task = state.tasks.find(t => t.id === schedule.taskId);
         return !!task?.isRecurring;
+    }
+
+    // Update a task's estimated time based on rolling average of actual completions
+    function updateEstimatedTime(task) {
+        if (!task) return;
+        const actuals = [];
+        // Scan recent completions for this task (last 30 days)
+        const now = new Date();
+        for (let i = 0; i < 30; i++) {
+            const d = new Date(now);
+            d.setDate(now.getDate() - i);
+            const dateStr = localDateStr(d);
+            const dayCompletions = state.completions[dateStr];
+            if (!dayCompletions) continue;
+            // Find all schedules for this task
+            state.schedules.filter(s => s.taskId === task.id).forEach(s => {
+                const entry = dayCompletions[s.id];
+                if (entry?.actualMin && entry.actualMin > 0) {
+                    actuals.push(entry.actualMin);
+                }
+                // Also check composite IDs for daily tasks
+                if (entry?.timeLogs) {
+                    entry.timeLogs.forEach(l => {
+                        if (l.actualMin > 0) actuals.push(l.actualMin);
+                    });
+                }
+            });
+        }
+        if (actuals.length >= 2) {
+            // Use rolling average, rounded to nearest 0.5
+            const avg = actuals.reduce((s, v) => s + v, 0) / actuals.length;
+            task.durationMin = Math.round(avg * 2) / 2;
+        }
     }
 
     function resetTask(scheduleId, date) {
@@ -664,9 +702,13 @@ const App = (() => {
                         <button class="btn btn-task btn-cancel" data-schedule="${sid}">Cancel</button>`;
                 }
             } else {
+                const estMin = task?.durationMin || '';
                 actionsHtml = `
-                    <button class="btn btn-task btn-start" data-schedule="${sid}">Start</button>
-                    <button class="btn btn-task btn-done" data-schedule="${sid}" title="Complete without timing">✓</button>`;
+                    <div class="manual-time-group">
+                        <input type="number" class="manual-time-input" data-schedule="${sid}" placeholder="${estMin || 'min'}" min="0" step="0.5" title="Enter minutes manually">
+                        <button class="btn btn-task btn-done" data-schedule="${sid}" title="Complete with entered time (or estimated)">✓</button>
+                    </div>
+                    <button class="btn btn-task btn-start" data-schedule="${sid}">Start</button>`;
             }
 
             const todBadge = todLabel ? `<span class="tod-badge tod-${s._tod}">${todLabel}</span>` : '';
@@ -708,11 +750,50 @@ const App = (() => {
             });
         });
 
-        // Quick complete (checkmark) handlers
+        // Quick complete (checkmark) handlers — with optional manual time
         $('member-tasks').querySelectorAll('.btn-done').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                toggleCompletion(btn.dataset.schedule, d);
+                const sid = btn.dataset.schedule;
+                const input = $('member-tasks').querySelector(`.manual-time-input[data-schedule="${sid}"]`);
+                const manualMin = input ? parseFloat(input.value) : NaN;
+
+                // Find the task to get estimated time as fallback
+                const schedule = state.schedules.find(s => s.id === sid) ||
+                    state.schedules.find(s => sid.startsWith(s.id));
+                const task = schedule ? state.tasks.find(t => t.id === schedule.taskId) : null;
+
+                if (!state.completions[d]) state.completions[d] = {};
+
+                if (!isNaN(manualMin) && manualMin > 0) {
+                    // Manual time entered
+                    state.completions[d][sid] = {
+                        startedAt: Date.now() - manualMin * 60000,
+                        finishedAt: Date.now(),
+                        actualMin: manualMin,
+                        pausedAt: null,
+                        pausedTotal: 0
+                    };
+                } else if (task?.durationMin) {
+                    // No manual time — use estimated time
+                    state.completions[d][sid] = {
+                        startedAt: Date.now() - task.durationMin * 60000,
+                        finishedAt: Date.now(),
+                        actualMin: task.durationMin,
+                        pausedAt: null,
+                        pausedTotal: 0
+                    };
+                } else {
+                    // No time at all — simple completion
+                    state.completions[d][sid] = { completed: true };
+                }
+
+                // Update estimated time based on average of actual times
+                if (task && (manualMin > 0 || task.durationMin)) {
+                    updateEstimatedTime(task);
+                }
+
+                gist.save();
                 renderMemberTasks(memberId);
             });
         });
@@ -1460,18 +1541,18 @@ const App = (() => {
 
         let html = '';
 
-        // === Show unscheduled / needs-days tasks ===
-        if (statusFilter === 'unscheduled' || statusFilter === 'no-days' || statusFilter === 'all') {
+        // === Show unassigned / needs-days tasks ===
+        if (statusFilter === 'unassigned' || statusFilter === 'no-days' || statusFilter === 'needs-attention') {
             let unschedTasks;
             let sectionTitle;
-            if (statusFilter === 'unscheduled') {
+            if (statusFilter === 'unassigned') {
                 unschedTasks = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'unscheduled');
-                sectionTitle = 'Unscheduled Tasks';
+                sectionTitle = 'Unassigned Tasks';
             } else if (statusFilter === 'no-days') {
                 unschedTasks = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'no-days');
                 sectionTitle = 'Tasks Needing Days Picked';
             } else {
-                // "all" — show both unscheduled and needs-days
+                // "needs-attention" — show both unassigned and needs-days
                 unschedTasks = state.tasks.filter(t => {
                     const s = getTaskScheduleStatus(t.id);
                     return s === 'unscheduled' || s === 'no-days';
@@ -1479,17 +1560,12 @@ const App = (() => {
                 sectionTitle = 'Tasks Needing Attention';
             }
 
-            // Sub-filter by member
-            if (currentVal !== 'all') {
-                if (statusFilter === 'unscheduled') {
-                    // Unscheduled means no schedules at all — can't filter by member
-                } else {
-                    // For needs-days, filter to tasks assigned to this member
-                    const memberTaskIds = new Set(
-                        state.schedules.filter(s => s.memberId === currentVal).map(s => s.taskId)
-                    );
-                    unschedTasks = unschedTasks.filter(t => memberTaskIds.has(t.id));
-                }
+            // Sub-filter by member (only for needs-days, since unassigned has no member)
+            if (currentVal !== 'all' && statusFilter !== 'unassigned') {
+                const memberTaskIds = new Set(
+                    state.schedules.filter(s => s.memberId === currentVal).map(s => s.taskId)
+                );
+                unschedTasks = unschedTasks.filter(t => memberTaskIds.has(t.id));
             }
 
             if (unschedTasks.length > 0) {
@@ -1503,7 +1579,7 @@ const App = (() => {
                         .filter(Boolean);
                     const assigneeText = assignees.length > 0 ? assignees.join(', ') : '';
                     const statusBadge = status === 'unscheduled'
-                        ? '<span class="status-badge status-unscheduled">Unscheduled</span>'
+                        ? '<span class="status-badge status-unscheduled">Unassigned</span>'
                         : '<span class="status-badge status-nodays">Needs Days</span>';
 
                     html += `<div class="schedule-item">
@@ -1514,18 +1590,18 @@ const App = (() => {
                             ${assigneeText ? `<span class="task-assignee">${assigneeText}</span>` : ''}
                         </div>
                         <div class="task-actions">
-                            <button class="btn btn-small schedule-task-btn" data-id="${t.id}" style="color:var(--primary);border-color:var(--primary)">Schedule</button>
+                            <button class="btn btn-small schedule-task-btn" data-id="${t.id}" style="color:var(--primary);border-color:var(--primary)">Assign</button>
                         </div>
                     </div>`;
                 });
                 html += '</div>';
-            } else if (statusFilter !== 'all' && statusFilter !== 'scheduled') {
+            } else {
                 html += '<div class="empty-state"><p>No tasks match this filter.</p></div>';
             }
         }
 
         // === Show existing schedules ===
-        if (statusFilter === 'scheduled' || statusFilter === 'all') {
+        if (statusFilter === 'scheduled' || statusFilter === 'needs-attention') {
             const filteredSchedules = currentVal === 'all'
                 ? state.schedules
                 : state.schedules.filter(s => s.memberId === currentVal);
@@ -1563,7 +1639,8 @@ const App = (() => {
 
                         html += `<div class="schedule-item">
                             <div class="schedule-item-info">
-                                <span class="schedule-member-badge" style="background:${member?.color || '#999'}">${member?.name || '?'}</span>
+                                ${member ? renderAvatar(member) : '<span class="schedule-member-badge" style="background:#999">?</span>'}
+                                <span class="schedule-member-name">${member?.name || '?'}</span>
                                 <span>${task?.name || 'Unknown task'}</span>
                                 ${daysText ? `<span class="schedule-days">(${daysText})</span>` : ''}
                             </div>
@@ -2083,7 +2160,8 @@ const App = (() => {
                     }
 
                     html += `<div class="recurring-row">
-                        <span class="schedule-member-badge" style="background:${member.color}">${member.name}</span>
+                        ${renderAvatar(member)}
+                        <span class="schedule-member-name">${member.name}</span>
                         <span class="task-name">${task.name}</span>
                         <div class="recurring-stat">
                             <span class="recurring-stat-value">${totalSessions}</span>
