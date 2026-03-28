@@ -221,9 +221,34 @@ const App = (() => {
         }
         const now = Date.now();
         const activeMs = now - entry.startedAt - (entry.pausedTotal || 0);
-        entry.finishedAt = now;
-        entry.actualMin = Math.round(activeMs / 60000 * 10) / 10;
+        const actualMin = Math.round(activeMs / 60000 * 10) / 10;
+
+        // Check if this is a recurring task — if so, log time and reset for next use
+        const schedule = state.schedules.find(s => s.id === scheduleId) ||
+            state.schedules.find(s => scheduleId.startsWith(s.id)); // handle composite IDs
+        const task = schedule ? state.tasks.find(t => t.id === schedule.taskId) : null;
+
+        if (task?.isRecurring) {
+            // Append to time logs instead of marking complete
+            if (!entry.timeLogs) entry.timeLogs = [];
+            entry.timeLogs.push({ startedAt: entry.startedAt, finishedAt: now, actualMin });
+            // Reset the timer state so it can be started again
+            entry.startedAt = null;
+            entry.finishedAt = null;
+            entry.actualMin = null;
+            entry.pausedAt = null;
+            entry.pausedTotal = 0;
+        } else {
+            entry.finishedAt = now;
+            entry.actualMin = actualMin;
+        }
         gist.save();
+    }
+
+    function getTimeLogs(scheduleId, date) {
+        const entry = state.completions[date]?.[scheduleId];
+        if (!entry) return [];
+        return entry.timeLogs || [];
     }
 
     function resetTask(scheduleId, date) {
@@ -377,31 +402,49 @@ const App = (() => {
         container.innerHTML = state.family.map(member => {
             const memberSchedules = getTasksForMemberOnDate(member.id, d);
             const cid = s => s._compositeId || s.id;
-            const completed = memberSchedules.filter(s => isCompleted(cid(s), d)).length;
+
+            // Separate regular vs recurring
+            const regular = memberSchedules.filter(s => {
+                const task = state.tasks.find(t => t.id === s.taskId);
+                return !task?.isRecurring;
+            });
+            const recurring = memberSchedules.filter(s => {
+                const task = state.tasks.find(t => t.id === s.taskId);
+                return task?.isRecurring;
+            });
+
+            const completed = regular.filter(s => isCompleted(cid(s), d)).length;
             const inProgress = memberSchedules.filter(s => isInProgress(cid(s), d)).length;
-            const total = memberSchedules.length;
+            const total = regular.length;
             const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
             const color = member.color || '#4A90D9';
 
-            // Calculate time tracked today
-            const timeTracked = memberSchedules.reduce((sum, s) => {
+            // Calculate time tracked today (regular + recurring)
+            const timeTracked = regular.reduce((sum, s) => {
                 const c = getCompletion(cid(s), d);
                 return sum + (c?.actualMin || 0);
             }, 0);
+            const recurringTime = recurring.reduce((sum, s) => {
+                const logs = getTimeLogs(cid(s), d);
+                return sum + logs.reduce((ls, l) => ls + (l.actualMin || 0), 0);
+            }, 0);
+            const totalTimeTracked = timeTracked + recurringTime;
 
-            const previewItems = memberSchedules.slice(0, 3).map(s => {
+            const previewItems = memberSchedules.slice(0, 4).map(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
+                const isRec = task?.isRecurring;
                 const done = isCompleted(cid(s), d);
                 const prog = isInProgress(cid(s), d);
-                const icon = done ? '✓' : prog ? '◉' : '○';
+                const icon = isRec ? '↻' : done ? '✓' : prog ? '◉' : '○';
                 return `<div class="task-preview-item ${done ? 'done' : ''} ${prog ? 'in-prog' : ''}">
                     <span class="check">${icon}</span>
                     <span>${task ? task.name : 'Unknown task'}</span>
                 </div>`;
             }).join('');
 
-            const timeText = timeTracked > 0 ? ` · ${Math.round(timeTracked)} min tracked` : '';
+            const timeText = totalTimeTracked > 0 ? ` · ${Math.round(totalTimeTracked)} min tracked` : '';
             const progText = inProgress > 0 ? ` · ${inProgress} in progress` : '';
+            const recurText = recurring.length > 0 ? ` · ${recurring.length} recurring` : '';
 
             return `<div class="dashboard-card" data-member="${member.id}">
                 <div class="card-header">
@@ -411,7 +454,7 @@ const App = (() => {
                 <div class="progress-bar">
                     <div class="progress-fill" style="width:${pct}%;background:${color}"></div>
                 </div>
-                <div class="progress-text">${completed}/${total} tasks complete${progText}${timeText}</div>
+                <div class="progress-text">${completed}/${total} tasks complete${progText}${recurText}${timeText}</div>
                 <div class="task-preview">${previewItems}</div>
             </div>`;
         }).join('');
@@ -498,17 +541,33 @@ const App = (() => {
         // Helper for composite IDs (daily tasks with multiple time slots)
         const cid = s => s._compositeId || s.id;
 
-        // Calculate summary
-        const totalTasks = schedules.length;
-        const doneTasks = schedules.filter(s => isCompleted(cid(s), d)).length;
-        const totalEstMin = schedules.reduce((sum, s) => {
+        // Calculate summary — separate regular tasks from recurring
+        const regularSchedules = schedules.filter(s => {
+            const task = state.tasks.find(t => t.id === s.taskId);
+            return !task?.isRecurring;
+        });
+        const recurringSchedules = schedules.filter(s => {
+            const task = state.tasks.find(t => t.id === s.taskId);
+            return task?.isRecurring;
+        });
+
+        const totalTasks = regularSchedules.length;
+        const doneTasks = regularSchedules.filter(s => isCompleted(cid(s), d)).length;
+        const totalEstMin = regularSchedules.reduce((sum, s) => {
             const task = state.tasks.find(t => t.id === s.taskId);
             return sum + (task?.durationMin || 0);
         }, 0);
-        const totalActualMin = schedules.reduce((sum, s) => {
+        const totalActualMin = regularSchedules.reduce((sum, s) => {
             const c = getCompletion(cid(s), d);
             return sum + (c?.actualMin || 0);
         }, 0);
+
+        // Recurring time logged today
+        const recurringTimeMin = recurringSchedules.reduce((sum, s) => {
+            const logs = getTimeLogs(cid(s), d);
+            return sum + logs.reduce((ls, l) => ls + (l.actualMin || 0), 0);
+        }, 0);
+        const recurringCount = recurringSchedules.length;
 
         let html = `<div class="member-summary">
             <div class="summary-stat">
@@ -522,6 +581,14 @@ const App = (() => {
             ${totalActualMin > 0 ? `<div class="summary-stat">
                 <span class="summary-number">${Math.round(totalActualMin * 10) / 10}</span>
                 <span class="summary-label">Actual Minutes</span>
+            </div>` : ''}
+            ${recurringCount > 0 ? `<div class="summary-stat">
+                <span class="summary-number">${recurringCount}</span>
+                <span class="summary-label">Recurring</span>
+            </div>` : ''}
+            ${recurringTimeMin > 0 ? `<div class="summary-stat">
+                <span class="summary-number">${Math.round(recurringTimeMin * 10) / 10}</span>
+                <span class="summary-label">Recurring Min</span>
             </div>` : ''}
         </div>`;
 
@@ -540,7 +607,36 @@ const App = (() => {
 
             const paused = isPaused(sid, d);
 
-            if (done) {
+            const isRecurring = task?.isRecurring;
+
+            if (isRecurring) {
+                // Recurring tasks: show time log entries + Log button
+                const logs = getTimeLogs(sid, d);
+                const totalLogged = logs.reduce((sum, l) => sum + (l.actualMin || 0), 0);
+                const logCount = logs.length;
+
+                if (inProg || paused) {
+                    statusClass = 'in-progress';
+                    const elapsed = getActiveElapsed(comp);
+                    timerHtml = `<span class="task-timer ${paused ? 'paused' : ''}" data-schedule-id="${sid}">${formatElapsed(elapsed)}</span>`;
+                    if (paused) {
+                        actionsHtml = `
+                            <button class="btn btn-task btn-resume" data-schedule="${sid}">Resume</button>
+                            <button class="btn btn-task btn-finish" data-schedule="${sid}">Log</button>
+                            <button class="btn btn-task btn-cancel" data-schedule="${sid}">Cancel</button>`;
+                    } else {
+                        actionsHtml = `
+                            <button class="btn btn-task btn-pause" data-schedule="${sid}">Pause</button>
+                            <button class="btn btn-task btn-finish" data-schedule="${sid}">Log</button>
+                            <button class="btn btn-task btn-cancel" data-schedule="${sid}">Cancel</button>`;
+                    }
+                } else {
+                    timerHtml = totalLogged > 0
+                        ? `<span class="task-actual-time">${logCount}x · ${Math.round(totalLogged)} min</span>`
+                        : '';
+                    actionsHtml = `<button class="btn btn-task btn-start" data-schedule="${sid}">Log Time</button>`;
+                }
+            } else if (done) {
                 statusClass = 'completed';
                 const actualTime = comp?.actualMin != null ? `${Math.round(comp.actualMin * 10) / 10} min` : '';
                 timerHtml = actualTime ? `<span class="task-actual-time">${actualTime}</span>` : '';
@@ -552,11 +648,13 @@ const App = (() => {
                 if (paused) {
                     actionsHtml = `
                         <button class="btn btn-task btn-resume" data-schedule="${sid}">Resume</button>
-                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>`;
+                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>
+                        <button class="btn btn-task btn-cancel" data-schedule="${sid}">Cancel</button>`;
                 } else {
                     actionsHtml = `
                         <button class="btn btn-task btn-pause" data-schedule="${sid}">Pause</button>
-                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>`;
+                        <button class="btn btn-task btn-finish" data-schedule="${sid}">Finish</button>
+                        <button class="btn btn-task btn-cancel" data-schedule="${sid}">Cancel</button>`;
                 }
             } else {
                 actionsHtml = `
@@ -565,12 +663,14 @@ const App = (() => {
             }
 
             const todBadge = todLabel ? `<span class="tod-badge tod-${s._tod}">${todLabel}</span>` : '';
+            const recurBadge = isRecurring ? '<span class="tod-badge tod-recurring">Recurring</span>' : '';
+            const checkIcon = isRecurring ? '↻' : (done ? '✓' : (inProg || paused) ? '◉' : '');
 
-            return `<div class="member-task-item ${statusClass}" data-schedule="${sid}">
+            return `<div class="member-task-item ${statusClass} ${isRecurring ? 'recurring' : ''}" data-schedule="${sid}">
                 <div class="task-left">
-                    <div class="checkbox">${done ? '✓' : inProg ? '◉' : ''}</div>
+                    <div class="checkbox ${isRecurring ? 'recurring-check' : ''}">${checkIcon}</div>
                     <div class="task-details">
-                        <span class="task-label">${todBadge}${task ? task.name : 'Unknown'}</span>
+                        <span class="task-label">${todBadge}${recurBadge}${task ? task.name : 'Unknown'}</span>
                         <span class="task-sub">${estDur}${estDur && s.frequency ? ' · ' : ''}${s.frequency}</span>
                     </div>
                 </div>
@@ -624,6 +724,15 @@ const App = (() => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 resumeTask(btn.dataset.schedule, d);
+                renderMemberTasks(memberId);
+            });
+        });
+
+        // Cancel button handlers (cancel without logging)
+        $('member-tasks').querySelectorAll('.btn-cancel').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resetTask(btn.dataset.schedule, d);
                 renderMemberTasks(memberId);
             });
         });
@@ -756,6 +865,7 @@ const App = (() => {
             $('task-name').value = '';
             $('task-category').value = 'cleaning';
             $('task-duration').value = '';
+            $('task-recurring').checked = false;
             $('task-modal').classList.remove('hidden');
         });
 
@@ -769,6 +879,7 @@ const App = (() => {
             const name = $('task-name').value.trim();
             const category = $('task-category').value;
             const duration = parseFloat($('task-duration').value) || 0;
+            const isRecurring = $('task-recurring').checked;
             if (!name) return;
 
             if (editingTaskId) {
@@ -777,9 +888,10 @@ const App = (() => {
                     task.name = name;
                     task.category = category;
                     task.durationMin = duration;
+                    task.isRecurring = isRecurring;
                 }
             } else {
-                state.tasks.push({ id: uid(), name, category, durationMin: duration });
+                state.tasks.push({ id: uid(), name, category, durationMin: duration, isRecurring });
             }
             await gist.save();
             $('task-modal').classList.add('hidden');
@@ -1044,10 +1156,13 @@ const App = (() => {
                 .filter(Boolean);
             const assigneeText = assignees.length > 0 ? assignees.join(', ') : '';
 
+            const recurringBadge = t.isRecurring ? '<span class="tod-badge tod-recurring">Recurring</span>' : '';
+
             return `<div class="task-item">
                 <div class="task-info">
                     <span class="task-category-badge cat-${t.category}">${t.category}</span>
                     <span>${t.name}</span>
+                    ${recurringBadge}
                     ${t.durationMin ? `<span class="task-duration">${t.durationMin} min</span>` : ''}
                     ${statusBadge}
                     ${assigneeText ? `<span class="task-assignee">${assigneeText}</span>` : ''}
@@ -1068,6 +1183,7 @@ const App = (() => {
                 $('task-name').value = task.name;
                 $('task-category').value = task.category;
                 $('task-duration').value = task.durationMin || '';
+                $('task-recurring').checked = !!task.isRecurring;
                 $('task-modal').classList.remove('hidden');
             });
         });
@@ -1386,30 +1502,38 @@ const App = (() => {
 
         // ===== 1. Overview Cards =====
         html += '<div class="report-section"><h3>Overview</h3><div class="report-cards">';
+        const memberStats = []; // collect for charts below
         members.forEach(member => {
-            const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
             let totalAssigned = 0;
             let totalCompleted = 0;
             let totalEstMin = 0;
             let totalActualMin = 0;
+            let totalRecurringMin = 0;
 
             dates.forEach(date => {
                 const daySchedules = getTasksForMemberOnDate(member.id, date);
-                totalAssigned += daySchedules.length;
                 daySchedules.forEach(s => {
-                    if (isCompleted(s.id, date)) {
-                        totalCompleted++;
-                        const c = getCompletion(s.id, date);
-                        if (c?.actualMin) totalActualMin += c.actualMin;
-                    }
                     const task = state.tasks.find(t => t.id === s.taskId);
-                    if (task?.durationMin) totalEstMin += task.durationMin;
+                    const sid = s._compositeId || s.id;
+                    if (task?.isRecurring) {
+                        const logs = getTimeLogs(sid, date);
+                        totalRecurringMin += logs.reduce((sum, l) => sum + (l.actualMin || 0), 0);
+                    } else {
+                        totalAssigned++;
+                        if (isCompleted(sid, date)) {
+                            totalCompleted++;
+                            const c = getCompletion(sid, date);
+                            if (c?.actualMin) totalActualMin += c.actualMin;
+                        }
+                        if (task?.durationMin) totalEstMin += task.durationMin;
+                    }
                 });
             });
 
             const pct = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
             const estHrs = Math.round(totalEstMin / 60 * 10) / 10;
             const actHrs = Math.round(totalActualMin / 60 * 10) / 10;
+            const recurHrs = Math.round(totalRecurringMin / 60 * 10) / 10;
             const timeDiff = totalActualMin > 0 && totalEstMin > 0
                 ? Math.round(totalActualMin - totalEstMin) : null;
             const timeDiffText = timeDiff !== null
@@ -1417,6 +1541,8 @@ const App = (() => {
                 : '';
             const timeDiffClass = timeDiff !== null
                 ? (timeDiff > 0 ? 'over' : 'under') : '';
+
+            memberStats.push({ member, totalAssigned, totalCompleted, totalEstMin, totalActualMin, totalRecurringMin, pct });
 
             html += `<div class="report-card">
                 <div class="report-card-header">
@@ -1444,6 +1570,10 @@ const App = (() => {
                         <span class="stat-value">${actHrs}h</span>
                         <span class="stat-label">Actual Time</span>
                     </div>
+                    ${totalRecurringMin > 0 ? `<div class="report-stat">
+                        <span class="stat-value">${recurHrs}h</span>
+                        <span class="stat-label">Recurring</span>
+                    </div>` : ''}
                 </div>
                 ${timeDiffText ? `<div class="time-diff ${timeDiffClass}">${timeDiffText} estimate</div>` : ''}
                 <div class="progress-bar" style="margin-top:10px">
@@ -1453,11 +1583,181 @@ const App = (() => {
         });
         html += '</div></div>';
 
-        // ===== 2. Task Frequency Tracker (weekly tasks with multiple completions) =====
-        html += '<div class="report-section"><h3>Weekly Task Tracker</h3>';
-        html += '<p class="report-desc">Track progress on recurring tasks — shows completions and time this week vs. expected.</p>';
+        // ===== 2. Completion Rate Chart (bar chart) =====
+        if (members.length > 1) {
+            html += '<div class="report-section"><h3>Completion Rate Comparison</h3>';
+            html += '<div class="chart-container"><div class="bar-chart">';
+            const maxAssigned = Math.max(...memberStats.map(s => s.totalAssigned), 1);
+            memberStats.forEach(({ member, totalAssigned, totalCompleted, pct }) => {
+                const completedH = Math.round((totalCompleted / maxAssigned) * 100);
+                const remainH = Math.round(((totalAssigned - totalCompleted) / maxAssigned) * 100);
+                html += `<div class="bar-group">
+                    <div class="bar-value">${pct}%</div>
+                    <div class="bar" style="height:${remainH}%;background:${member.color};opacity:0.25" title="${totalAssigned - totalCompleted} remaining"></div>
+                    <div class="bar" style="height:${completedH}%;background:${member.color}" title="${totalCompleted} completed"></div>
+                    <div class="bar-label">${member.name}</div>
+                </div>`;
+            });
+            html += '</div>';
+            html += `<div class="chart-legend">
+                <span class="legend-item"><span class="legend-dot" style="background:var(--primary)"></span> Completed</span>
+                <span class="legend-item"><span class="legend-dot" style="background:var(--primary);opacity:0.25"></span> Remaining</span>
+            </div>`;
+            html += '</div></div>';
+        }
 
-        // Get this week's dates regardless of period filter
+        // ===== 3. Time Comparison Chart (Est vs Actual) =====
+        if (memberStats.some(s => s.totalActualMin > 0)) {
+            html += '<div class="report-section"><h3>Estimated vs Actual Time</h3>';
+            html += '<div class="chart-container"><div class="bar-chart">';
+            const maxTime = Math.max(...memberStats.map(s => Math.max(s.totalEstMin, s.totalActualMin)), 1);
+            memberStats.forEach(({ member, totalEstMin, totalActualMin }) => {
+                const estH = Math.round((totalEstMin / maxTime) * 100);
+                const actH = Math.round((totalActualMin / maxTime) * 100);
+                html += `<div class="bar-group" style="flex:2">
+                    <div class="bar-value">${Math.round(totalEstMin)}m</div>
+                    <div class="bar" style="height:${estH}%;background:${member.color};opacity:0.4" title="${Math.round(totalEstMin)} min estimated"></div>
+                    <div class="bar-label">${member.name} Est</div>
+                </div>
+                <div class="bar-group" style="flex:2">
+                    <div class="bar-value">${Math.round(totalActualMin)}m</div>
+                    <div class="bar" style="height:${actH}%;background:${member.color}" title="${Math.round(totalActualMin)} min actual"></div>
+                    <div class="bar-label">${member.name} Act</div>
+                </div>`;
+            });
+            html += '</div>';
+            html += `<div class="chart-legend">
+                <span class="legend-item"><span class="legend-dot" style="background:var(--primary);opacity:0.4"></span> Estimated</span>
+                <span class="legend-item"><span class="legend-dot" style="background:var(--primary)"></span> Actual</span>
+            </div>`;
+            html += '</div></div>';
+        }
+
+        // ===== 4. Category Donut Chart =====
+        const catTotals = {};
+        dates.forEach(date => {
+            members.forEach(member => {
+                const daySchedules = getTasksForMemberOnDate(member.id, date);
+                daySchedules.forEach(s => {
+                    const task = state.tasks.find(t => t.id === s.taskId);
+                    if (!task) return;
+                    const sid = s._compositeId || s.id;
+                    const cat = task.category || 'other';
+                    if (!catTotals[cat]) catTotals[cat] = { est: 0, actual: 0, count: 0, completed: 0 };
+                    catTotals[cat].count++;
+                    catTotals[cat].est += task.durationMin || 0;
+                    if (!task.isRecurring && isCompleted(sid, date)) {
+                        catTotals[cat].completed++;
+                        const c = getCompletion(sid, date);
+                        if (c?.actualMin) catTotals[cat].actual += c.actualMin;
+                    }
+                });
+            });
+        });
+
+        const catColors = {
+            cleaning: '#10B981', kitchen: '#F59E0B', laundry: '#3B82F6',
+            outdoor: '#84CC16', pets: '#EC4899', other: '#8B5CF6'
+        };
+        const catEntries = Object.entries(catTotals);
+        const totalTasks = catEntries.reduce((s, [, d]) => s + d.count, 0);
+
+        if (catEntries.length > 0) {
+            html += '<div class="report-section"><h3>Tasks by Category</h3>';
+            html += '<div class="donut-container">';
+
+            // SVG donut chart
+            const radius = 60;
+            const circumference = 2 * Math.PI * radius;
+            let offset = 0;
+            let donutPaths = '';
+            catEntries.forEach(([cat, data]) => {
+                const pct = totalTasks > 0 ? data.count / totalTasks : 0;
+                const dashLen = pct * circumference;
+                const dashGap = circumference - dashLen;
+                donutPaths += `<circle cx="80" cy="80" r="${radius}" fill="none" stroke="${catColors[cat] || '#8B5CF6'}"
+                    stroke-width="20" stroke-dasharray="${dashLen} ${dashGap}"
+                    stroke-dashoffset="${-offset}" />`;
+                offset += dashLen;
+            });
+
+            html += `<div class="donut-chart">
+                <svg width="160" height="160" viewBox="0 0 160 160">${donutPaths}</svg>
+                <div class="donut-center">
+                    <span class="donut-value">${totalTasks}</span>
+                    <span class="donut-label">Total Tasks</span>
+                </div>
+            </div>`;
+
+            html += '<div class="donut-legend">';
+            catEntries.forEach(([cat, data]) => {
+                const pct = totalTasks > 0 ? Math.round((data.count / totalTasks) * 100) : 0;
+                html += `<div class="donut-legend-item">
+                    <span class="donut-legend-dot" style="background:${catColors[cat] || '#8B5CF6'}"></span>
+                    <span>${cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                    <span class="donut-legend-value">${data.count} (${pct}%)</span>
+                </div>`;
+            });
+            html += '</div></div>';
+
+            // Category time breakdown bars
+            html += '<div class="category-breakdown" style="margin-top:20px">';
+            const maxEst = Math.max(...Object.values(catTotals).map(c => c.est), 1);
+            for (const [cat, data] of catEntries) {
+                const barWidth = Math.round((data.est / maxEst) * 100);
+                html += `<div class="cat-row">
+                    <span class="task-category-badge cat-${cat}">${cat}</span>
+                    <div class="cat-bar-wrap">
+                        <div class="cat-bar" style="width:${barWidth}%">
+                            <span class="cat-bar-label">${Math.round(data.est)} min est</span>
+                        </div>
+                        ${data.actual > 0 ? `<div class="cat-bar actual" style="width:${Math.round((data.actual / maxEst) * 100)}%">
+                            <span class="cat-bar-label">${Math.round(data.actual)} min actual</span>
+                        </div>` : ''}
+                    </div>
+                    <span class="cat-stats">${data.completed}/${data.count}</span>
+                </div>`;
+            }
+            html += '</div></div>';
+        }
+
+        // ===== 5. Daily Activity Heatmap =====
+        if (dates.length > 1) {
+            html += '<div class="report-section"><h3>Daily Activity</h3>';
+            html += '<p class="report-desc">Task completions per day — darker = more tasks completed.</p>';
+            html += '<div class="streak-grid">';
+            const dailyCounts = dates.map(date => {
+                let count = 0;
+                members.forEach(member => {
+                    const daySchedules = getTasksForMemberOnDate(member.id, date);
+                    daySchedules.forEach(s => {
+                        const sid = s._compositeId || s.id;
+                        if (isCompleted(sid, date)) count++;
+                    });
+                });
+                return { date, count };
+            });
+            const maxDaily = Math.max(...dailyCounts.map(d => d.count), 1);
+            dailyCounts.forEach(({ date, count }) => {
+                const intensity = count > 0 ? Math.max(0.15, count / maxDaily) : 0;
+                const bg = count > 0 ? `rgba(99,102,241,${intensity})` : 'var(--border)';
+                const dayName = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                html += `<div class="streak-cell" style="background:${bg}" title="${dayName}: ${count} tasks"></div>`;
+            });
+            html += '</div>';
+            html += `<div class="chart-legend" style="margin-top:8px">
+                <span class="legend-item"><span class="legend-dot" style="background:var(--border)"></span> 0</span>
+                <span class="legend-item"><span class="legend-dot" style="background:rgba(99,102,241,0.3)"></span> Low</span>
+                <span class="legend-item"><span class="legend-dot" style="background:rgba(99,102,241,0.6)"></span> Medium</span>
+                <span class="legend-item"><span class="legend-dot" style="background:rgba(99,102,241,1)"></span> High</span>
+            </div>`;
+            html += '</div>';
+        }
+
+        // ===== 6. Weekly Task Tracker Table =====
+        html += '<div class="report-section"><h3>Weekly Task Tracker</h3>';
+        html += '<p class="report-desc">Track progress on tasks — shows completions and time this week vs. expected.</p>';
+
         const now = new Date();
         const weekStart = new Date(now);
         weekStart.setDate(now.getDate() - now.getDay());
@@ -1472,11 +1772,10 @@ const App = (() => {
             const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
             if (memberSchedules.length === 0) return;
 
-            // Group by task to aggregate across frequencies
             const taskMap = new Map();
             memberSchedules.forEach(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
-                if (!task) return;
+                if (!task || task.isRecurring) return; // recurring tracked separately
 
                 if (!taskMap.has(task.id)) {
                     taskMap.set(task.id, {
@@ -1489,16 +1788,16 @@ const App = (() => {
                 const entry = taskMap.get(task.id);
                 entry.schedules.push(s);
 
-                // Calculate expected occurrences per week
                 if (s.frequency === 'daily') {
                     entry.expectedPerWeek += 7;
                 } else if (s.frequency === 'weekly') {
                     entry.expectedPerWeek += Math.max(s.days?.length || 1, 1);
                 } else if (s.frequency === 'monthly') {
-                    // Roughly 1 per month = ~0.25 per week
                     entry.expectedPerWeek += (s.days?.length || 1) * 0.25;
                 }
             });
+
+            if (taskMap.size === 0) return;
 
             html += `<div class="report-member-block">
                 <h4 style="color:${member.color}">${member.name}</h4>
@@ -1513,13 +1812,11 @@ const App = (() => {
                     </div>`;
 
             taskMap.forEach(({ task, schedules, expectedPerWeek, estMinPerOccurrence }) => {
-                // Count completions this week
                 let weekCompletions = 0;
                 let weekActualMin = 0;
 
                 weekDates.forEach(date => {
                     schedules.forEach(s => {
-                        // Check if this schedule applies on this date
                         const dow = dayOfWeek(date);
                         const dom = dayOfMonth(date);
                         let applies = false;
@@ -1540,7 +1837,6 @@ const App = (() => {
                 const pct = expectedPerWeek > 0 ? Math.min(100, Math.round((weekCompletions / expectedPerWeek) * 100)) : 0;
                 const actualFormatted = weekActualMin > 0 ? `${Math.round(weekActualMin)} min` : '-';
                 const estFormatted = totalEstMin > 0 ? `${totalEstMin} min` : '-';
-
                 const barColor = pct >= 100 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : member.color;
 
                 html += `<div class="freq-row">
@@ -1560,47 +1856,53 @@ const App = (() => {
         });
         html += '</div>';
 
-        // ===== 3. Category Breakdown =====
-        html += '<div class="report-section"><h3>Time by Category</h3>';
-        html += '<div class="category-breakdown">';
+        // ===== 7. Recurring Tasks Summary =====
+        const hasRecurring = state.tasks.some(t => t.isRecurring);
+        if (hasRecurring) {
+            html += '<div class="report-section"><h3>Recurring Tasks Summary</h3>';
+            html += '<p class="report-desc">Time logged for recurring tasks (never marked as "done").</p>';
+            html += '<div class="recurring-summary">';
 
-        const catTotals = {};
-        dates.forEach(date => {
             members.forEach(member => {
-                const daySchedules = getTasksForMemberOnDate(member.id, date);
-                daySchedules.forEach(s => {
+                const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
+                memberSchedules.forEach(s => {
                     const task = state.tasks.find(t => t.id === s.taskId);
-                    if (!task) return;
-                    const cat = task.category || 'other';
-                    if (!catTotals[cat]) catTotals[cat] = { est: 0, actual: 0, count: 0, completed: 0 };
-                    catTotals[cat].count++;
-                    catTotals[cat].est += task.durationMin || 0;
-                    if (isCompleted(s.id, date)) {
-                        catTotals[cat].completed++;
-                        const c = getCompletion(s.id, date);
-                        if (c?.actualMin) catTotals[cat].actual += c.actualMin;
+                    if (!task?.isRecurring) return;
+
+                    let totalLogged = 0;
+                    let totalSessions = 0;
+                    dates.forEach(date => {
+                        const dayTasks = getTasksForMemberOnDate(member.id, date);
+                        dayTasks.forEach(dt => {
+                            if (dt.taskId !== task.id) return;
+                            const sid = dt._compositeId || dt.id;
+                            const logs = getTimeLogs(sid, date);
+                            totalSessions += logs.length;
+                            totalLogged += logs.reduce((sum, l) => sum + (l.actualMin || 0), 0);
+                        });
+                    });
+
+                    if (totalSessions === 0 && dates.length <= 1) {
+                        // Show even if no sessions for today view
                     }
+
+                    html += `<div class="recurring-row">
+                        <span class="schedule-member-badge" style="background:${member.color}">${member.name}</span>
+                        <span class="task-name">${task.name}</span>
+                        <div class="recurring-stat">
+                            <span class="recurring-stat-value">${totalSessions}</span>
+                            <span class="recurring-stat-label">Sessions</span>
+                        </div>
+                        <div class="recurring-stat">
+                            <span class="recurring-stat-value">${Math.round(totalLogged * 10) / 10}</span>
+                            <span class="recurring-stat-label">Minutes</span>
+                        </div>
+                    </div>`;
                 });
             });
-        });
 
-        const maxEst = Math.max(...Object.values(catTotals).map(c => c.est), 1);
-        for (const [cat, data] of Object.entries(catTotals)) {
-            const barWidth = Math.round((data.est / maxEst) * 100);
-            html += `<div class="cat-row">
-                <span class="task-category-badge cat-${cat}">${cat}</span>
-                <div class="cat-bar-wrap">
-                    <div class="cat-bar" style="width:${barWidth}%">
-                        <span class="cat-bar-label">${Math.round(data.est)} min est</span>
-                    </div>
-                    ${data.actual > 0 ? `<div class="cat-bar actual" style="width:${Math.round((data.actual / maxEst) * 100)}%">
-                        <span class="cat-bar-label">${Math.round(data.actual)} min actual</span>
-                    </div>` : ''}
-                </div>
-                <span class="cat-stats">${data.completed}/${data.count}</span>
-            </div>`;
+            html += '</div></div>';
         }
-        html += '</div></div>';
 
         $('reports-content').innerHTML = html;
     }

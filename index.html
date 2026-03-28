@@ -134,6 +134,13 @@
                             <label for="task-duration">Duration (minutes) <span class="optional">(optional)</span></label>
                             <input type="number" id="task-duration" placeholder="e.g., 15" min="0">
                         </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="task-recurring">
+                                <span>Recurring task</span>
+                            </label>
+                            <small>Recurring tasks track time but are never "done" (e.g., letting dogs out)</small>
+                        </div>
                         <div class="modal-actions">
                             <button id="save-task-btn" class="btn btn-primary">Save</button>
                             <button id="cancel-task-btn" class="btn btn-secondary">Cancel</button>

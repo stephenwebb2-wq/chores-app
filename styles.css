@@ -1280,6 +1280,278 @@ header nav {
 .tod-morning { background: #FEF3C7; color: #92400E; }
 .tod-afternoon { background: #DBEAFE; color: #1E40AF; }
 .tod-evening { background: #EDE9FE; color: #5B21B6; }
+.tod-recurring { background: #D1FAE5; color: #065F46; }
+
+/* ===== Cancel Button ===== */
+.btn-cancel {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+.btn-cancel:hover {
+    background: #FECACA;
+    color: #7F1D1D;
+}
+
+/* ===== Recurring Tasks ===== */
+.member-task-item.recurring {
+    border-left: 3px solid #10B981;
+}
+
+.checkbox.recurring-check {
+    background: #D1FAE5;
+    border-color: #10B981;
+    color: #065F46;
+    font-size: 0.9rem;
+}
+
+/* ===== Checkbox Label (for modal) ===== */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+/* ===== Enhanced Reports: Charts ===== */
+.chart-container {
+    position: relative;
+    padding: 16px 0;
+}
+
+.bar-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: 180px;
+    padding: 0 4px;
+    border-bottom: 2px solid var(--border);
+}
+
+.bar-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    gap: 2px;
+    min-width: 0;
+}
+
+.bar {
+    width: 100%;
+    max-width: 40px;
+    border-radius: 4px 4px 0 0;
+    transition: height 0.4s ease;
+    min-height: 2px;
+    position: relative;
+}
+
+.bar:hover {
+    opacity: 0.85;
+}
+
+.bar-label {
+    font-size: 0.68rem;
+    color: var(--text-light);
+    font-weight: 600;
+    margin-top: 6px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.bar-value {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text);
+    text-align: center;
+}
+
+.chart-legend {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-light);
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+/* Donut Chart */
+.donut-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 32px;
+    flex-wrap: wrap;
+    padding: 16px 0;
+}
+
+.donut-chart {
+    position: relative;
+    width: 160px;
+    height: 160px;
+}
+
+.donut-chart svg {
+    transform: rotate(-90deg);
+}
+
+.donut-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.donut-center .donut-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--text);
+    display: block;
+}
+
+.donut-center .donut-label {
+    font-size: 0.72rem;
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+.donut-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.donut-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.donut-legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.donut-legend-value {
+    font-weight: 700;
+    margin-left: auto;
+    padding-left: 12px;
+}
+
+/* Streak & Heatmap */
+.streak-grid {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 8px 0;
+}
+
+.streak-cell {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    position: relative;
+}
+
+.streak-cell[title]:hover {
+    outline: 2px solid var(--primary);
+}
+
+/* Recurring Summary */
+.recurring-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.recurring-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #FAFBFC;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.recurring-row .task-name {
+    flex: 1;
+    font-weight: 500;
+    font-size: 0.92rem;
+}
+
+.recurring-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+}
+
+.recurring-stat-value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.recurring-stat-label {
+    font-size: 0.68rem;
+    color: var(--text-light);
+    text-transform: uppercase;
+}
+
+[data-theme="dark"] .recurring-row {
+    background: #0F172A;
+}
+
+[data-theme="dark"] .bar-chart {
+    border-bottom-color: var(--border);
+}
+
+[data-theme="dark"] .btn-cancel {
+    background: #451a1a;
+    color: #FCA5A5;
+    border-color: #7F1D1D;
+}
+
+[data-theme="dark"] .member-task-item.recurring {
+    border-left-color: #059669;
+}
 
 /* ===== Theme Toggle & Accent Picker ===== */
 .theme-toggle {
