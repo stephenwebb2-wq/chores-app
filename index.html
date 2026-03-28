@@ -96,12 +96,16 @@
                             <option value="all">All Tasks</option>
                             <option value="unscheduled">Unscheduled</option>
                             <option value="no-days">Needs Days Picked</option>
+                            <option value="recurring">Recurring</option>
                             <option value="cleaning">Cleaning</option>
                             <option value="kitchen">Kitchen</option>
                             <option value="laundry">Laundry</option>
                             <option value="outdoor">Outdoor</option>
                             <option value="pets">Pets</option>
                             <option value="other">Other</option>
+                        </select>
+                        <select id="tasks-member-filter">
+                            <option value="all">All Members</option>
                         </select>
                         <button id="import-tasks-btn" class="btn btn-secondary">Import Spreadsheet</button>
                         <button id="add-task-btn" class="btn btn-primary">+ Add Task</button>
@@ -179,6 +183,7 @@
                                 <option value="daily">Daily</option>
                                 <option value="weekly">Weekly</option>
                                 <option value="monthly">Monthly</option>
+                                <option value="recurring">Recurring (never done)</option>
                             </select>
                         </div>
                         <div id="time-of-day-picker" class="day-picker hidden">

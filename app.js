@@ -104,13 +104,13 @@ const App = (() => {
         state.schedules.forEach(s => {
             if (s.memberId !== memberId) return;
             let applies = false;
-            if (s.frequency === 'daily') applies = true;
+            if (s.frequency === 'daily' || s.frequency === 'recurring') applies = true;
             else if (s.frequency === 'weekly') applies = s.days.includes(dow);
             else if (s.frequency === 'monthly') applies = s.days.includes(dom);
             if (!applies) return;
 
-            // For daily tasks with multiple time-of-day slots, expand into separate entries
-            if (s.frequency === 'daily' && s.timeOfDay && s.timeOfDay.length > 1) {
+            // For daily/recurring tasks with multiple time-of-day slots, expand into separate entries
+            if ((s.frequency === 'daily' || s.frequency === 'recurring') && s.timeOfDay && s.timeOfDay.length > 1) {
                 s.timeOfDay.forEach(tod => {
                     results.push({
                         ...s,
@@ -226,9 +226,8 @@ const App = (() => {
         // Check if this is a recurring task — if so, log time and reset for next use
         const schedule = state.schedules.find(s => s.id === scheduleId) ||
             state.schedules.find(s => scheduleId.startsWith(s.id)); // handle composite IDs
-        const task = schedule ? state.tasks.find(t => t.id === schedule.taskId) : null;
 
-        if (task?.isRecurring) {
+        if (schedule && isRecurringEntry(schedule)) {
             // Append to time logs instead of marking complete
             if (!entry.timeLogs) entry.timeLogs = [];
             entry.timeLogs.push({ startedAt: entry.startedAt, finishedAt: now, actualMin });
@@ -249,6 +248,13 @@ const App = (() => {
         const entry = state.completions[date]?.[scheduleId];
         if (!entry) return [];
         return entry.timeLogs || [];
+    }
+
+    // Check if a schedule entry is recurring (either task flag or schedule frequency)
+    function isRecurringEntry(schedule) {
+        if (schedule.frequency === 'recurring') return true;
+        const task = state.tasks.find(t => t.id === schedule.taskId);
+        return !!task?.isRecurring;
     }
 
     function resetTask(scheduleId, date) {
@@ -404,14 +410,8 @@ const App = (() => {
             const cid = s => s._compositeId || s.id;
 
             // Separate regular vs recurring
-            const regular = memberSchedules.filter(s => {
-                const task = state.tasks.find(t => t.id === s.taskId);
-                return !task?.isRecurring;
-            });
-            const recurring = memberSchedules.filter(s => {
-                const task = state.tasks.find(t => t.id === s.taskId);
-                return task?.isRecurring;
-            });
+            const regular = memberSchedules.filter(s => !isRecurringEntry(s));
+            const recurring = memberSchedules.filter(s => isRecurringEntry(s));
 
             const completed = regular.filter(s => isCompleted(cid(s), d)).length;
             const inProgress = memberSchedules.filter(s => isInProgress(cid(s), d)).length;
@@ -432,7 +432,7 @@ const App = (() => {
 
             const previewItems = memberSchedules.slice(0, 4).map(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
-                const isRec = task?.isRecurring;
+                const isRec = isRecurringEntry(s);
                 const done = isCompleted(cid(s), d);
                 const prog = isInProgress(cid(s), d);
                 const icon = isRec ? '↻' : done ? '✓' : prog ? '◉' : '○';
@@ -542,14 +542,8 @@ const App = (() => {
         const cid = s => s._compositeId || s.id;
 
         // Calculate summary — separate regular tasks from recurring
-        const regularSchedules = schedules.filter(s => {
-            const task = state.tasks.find(t => t.id === s.taskId);
-            return !task?.isRecurring;
-        });
-        const recurringSchedules = schedules.filter(s => {
-            const task = state.tasks.find(t => t.id === s.taskId);
-            return task?.isRecurring;
-        });
+        const regularSchedules = schedules.filter(s => !isRecurringEntry(s));
+        const recurringSchedules = schedules.filter(s => isRecurringEntry(s));
 
         const totalTasks = regularSchedules.length;
         const doneTasks = regularSchedules.filter(s => isCompleted(cid(s), d)).length;
@@ -607,7 +601,7 @@ const App = (() => {
 
             const paused = isPaused(sid, d);
 
-            const isRecurring = task?.isRecurring;
+            const isRecurring = isRecurringEntry(s);
 
             if (isRecurring) {
                 // Recurring tasks: show time log entries + Log button
@@ -874,6 +868,7 @@ const App = (() => {
         });
 
         $('tasks-filter').addEventListener('change', renderTasks);
+        $('tasks-member-filter').addEventListener('change', renderTasks);
 
         $('save-task-btn').addEventListener('click', async () => {
             const name = $('task-name').value.trim();
@@ -1112,27 +1107,51 @@ const App = (() => {
     function renderTasks() {
         const filterVal = $('tasks-filter')?.value || 'all';
 
+        // Populate and read member filter
+        const memberDropdown = $('tasks-member-filter');
+        const currentMemberVal = memberDropdown.value;
+        memberDropdown.innerHTML = '<option value="all">All Members</option>' +
+            state.family.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+        memberDropdown.value = currentMemberVal;
+        const memberFilterVal = memberDropdown.value;
+
         if (state.tasks.length === 0) {
             $('tasks-list').innerHTML = '<div class="empty-state"><p>No tasks yet. Add tasks manually or import from a spreadsheet!</p></div>';
             $('tasks-filter-info').classList.add('hidden');
             return;
         }
 
-        // Filter tasks
+        // Filter tasks by type/status
         let filtered = state.tasks;
         if (filterVal === 'unscheduled') {
             filtered = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'unscheduled');
         } else if (filterVal === 'no-days') {
             filtered = state.tasks.filter(t => getTaskScheduleStatus(t.id) === 'no-days');
+        } else if (filterVal === 'recurring') {
+            filtered = state.tasks.filter(t =>
+                t.isRecurring || state.schedules.some(s => s.taskId === t.id && s.frequency === 'recurring')
+            );
         } else if (['cleaning', 'kitchen', 'laundry', 'outdoor', 'pets', 'other'].includes(filterVal)) {
             filtered = state.tasks.filter(t => t.category === filterVal);
         }
 
+        // Sub-filter by member
+        if (memberFilterVal !== 'all') {
+            const memberTaskIds = new Set(
+                state.schedules.filter(s => s.memberId === memberFilterVal).map(s => s.taskId)
+            );
+            filtered = filtered.filter(t => memberTaskIds.has(t.id));
+        }
+
         // Show filter info
         const info = $('tasks-filter-info');
-        if (filterVal !== 'all') {
+        if (filterVal !== 'all' || memberFilterVal !== 'all') {
             const total = state.tasks.length;
-            info.textContent = `Showing ${filtered.length} of ${total} tasks`;
+            const memberName = memberFilterVal !== 'all'
+                ? state.family.find(m => m.id === memberFilterVal)?.name || ''
+                : '';
+            const memberText = memberName ? ` for ${memberName}` : '';
+            info.textContent = `Showing ${filtered.length} of ${total} tasks${memberText}`;
             info.classList.remove('hidden');
         } else {
             info.classList.add('hidden');
@@ -1156,7 +1175,8 @@ const App = (() => {
                 .filter(Boolean);
             const assigneeText = assignees.length > 0 ? assignees.join(', ') : '';
 
-            const recurringBadge = t.isRecurring ? '<span class="tod-badge tod-recurring">Recurring</span>' : '';
+            const hasRecurringSchedule = t.isRecurring || state.schedules.some(s => s.taskId === t.id && s.frequency === 'recurring');
+            const recurringBadge = hasRecurringSchedule ? '<span class="tod-badge tod-recurring">Recurring</span>' : '';
 
             return `<div class="task-item">
                 <div class="task-info">
@@ -1235,7 +1255,7 @@ const App = (() => {
 
             if (!taskId || !memberId) return;
 
-            const timeOfDay = frequency === 'daily' ? [...selectedTimeOfDay] : [];
+            const timeOfDay = (frequency === 'daily' || frequency === 'recurring') ? [...selectedTimeOfDay] : [];
 
             if (editingScheduleId) {
                 const schedule = state.schedules.find(s => s.id === editingScheduleId);
@@ -1294,7 +1314,7 @@ const App = (() => {
     function renderTimeOfDayPicker() {
         const freq = $('assign-frequency').value;
         const picker = $('time-of-day-picker');
-        if (freq === 'daily') {
+        if (freq === 'daily' || freq === 'recurring') {
             picker.classList.remove('hidden');
             $$('#time-of-day-options .day-option').forEach(opt => {
                 opt.classList.toggle('selected', selectedTimeOfDay.includes(opt.dataset.tod));
@@ -1308,7 +1328,7 @@ const App = (() => {
         const freq = $('assign-frequency').value;
         const container = $('day-options');
 
-        if (freq === 'daily') {
+        if (freq === 'daily' || freq === 'recurring') {
             $('day-picker').classList.add('hidden');
             return;
         }
@@ -1366,7 +1386,7 @@ const App = (() => {
         }
 
         // Group by frequency
-        const groups = { daily: [], weekly: [], monthly: [] };
+        const groups = { daily: [], weekly: [], monthly: [], recurring: [] };
         filteredSchedules.forEach(s => {
             if (groups[s.frequency]) groups[s.frequency].push(s);
         });
@@ -1515,7 +1535,7 @@ const App = (() => {
                 daySchedules.forEach(s => {
                     const task = state.tasks.find(t => t.id === s.taskId);
                     const sid = s._compositeId || s.id;
-                    if (task?.isRecurring) {
+                    if (isRecurringEntry(s)) {
                         const logs = getTimeLogs(sid, date);
                         totalRecurringMin += logs.reduce((sum, l) => sum + (l.actualMin || 0), 0);
                     } else {
@@ -1646,7 +1666,7 @@ const App = (() => {
                     if (!catTotals[cat]) catTotals[cat] = { est: 0, actual: 0, count: 0, completed: 0 };
                     catTotals[cat].count++;
                     catTotals[cat].est += task.durationMin || 0;
-                    if (!task.isRecurring && isCompleted(sid, date)) {
+                    if (!isRecurringEntry(s) && isCompleted(sid, date)) {
                         catTotals[cat].completed++;
                         const c = getCompletion(sid, date);
                         if (c?.actualMin) catTotals[cat].actual += c.actualMin;
@@ -1775,7 +1795,7 @@ const App = (() => {
             const taskMap = new Map();
             memberSchedules.forEach(s => {
                 const task = state.tasks.find(t => t.id === s.taskId);
-                if (!task || task.isRecurring) return; // recurring tracked separately
+                if (!task || isRecurringEntry(s)) return; // recurring tracked separately
 
                 if (!taskMap.has(task.id)) {
                     taskMap.set(task.id, {
@@ -1857,7 +1877,7 @@ const App = (() => {
         html += '</div>';
 
         // ===== 7. Recurring Tasks Summary =====
-        const hasRecurring = state.tasks.some(t => t.isRecurring);
+        const hasRecurring = state.schedules.some(s => isRecurringEntry(s)) || state.tasks.some(t => t.isRecurring);
         if (hasRecurring) {
             html += '<div class="report-section"><h3>Recurring Tasks Summary</h3>';
             html += '<p class="report-desc">Time logged for recurring tasks (never marked as "done").</p>';
@@ -1866,8 +1886,9 @@ const App = (() => {
             members.forEach(member => {
                 const memberSchedules = state.schedules.filter(s => s.memberId === member.id);
                 memberSchedules.forEach(s => {
+                    if (!isRecurringEntry(s)) return;
                     const task = state.tasks.find(t => t.id === s.taskId);
-                    if (!task?.isRecurring) return;
+                    if (!task) return;
 
                     let totalLogged = 0;
                     let totalSessions = 0;

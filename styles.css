@@ -623,6 +623,7 @@ header nav {
 .freq-daily { background: #DCFCE7; color: #166534; }
 .freq-weekly { background: #DBEAFE; color: #1E40AF; }
 .freq-monthly { background: #FCE7F3; color: #9D174D; }
+.freq-recurring { background: #D1FAE5; color: #065F46; }
 
 /* ===== Member View ===== */
 .member-header {
