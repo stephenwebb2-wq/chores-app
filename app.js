@@ -1423,14 +1423,22 @@ const App = (() => {
                     schedule.timeOfDay = timeOfDay;
                 }
             } else {
-                state.schedules.push({
-                    id: uid(),
-                    taskId,
-                    memberId,
-                    frequency,
-                    days: [...selectedDays],
-                    timeOfDay
-                });
+                // Check if this task+member combo is already scheduled — update it rather than duplicate
+                const existing = state.schedules.find(s => s.taskId === taskId && s.memberId === memberId);
+                if (existing) {
+                    existing.frequency = frequency;
+                    existing.days = [...selectedDays];
+                    existing.timeOfDay = timeOfDay;
+                } else {
+                    state.schedules.push({
+                        id: uid(),
+                        taskId,
+                        memberId,
+                        frequency,
+                        days: [...selectedDays],
+                        timeOfDay
+                    });
+                }
             }
             await gist.save();
             $('assign-modal').classList.add('hidden');
