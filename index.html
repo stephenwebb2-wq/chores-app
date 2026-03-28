@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Chores Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Setup Screen -->
+        <div id="setup-screen" class="screen">
+            <div class="setup-container">
+                <h1>Family Chores Tracker</h1>
+                <p class="subtitle">Connect to GitHub Gist to sync your family's chores</p>
+                <div class="form-group">
+                    <label for="gist-token">GitHub Personal Access Token</label>
+                    <input type="password" id="gist-token" placeholder="ghp_xxxxxxxxxxxx">
+                    <small>Needs <code>gist</code> scope. <a href="https://github.com/settings/tokens/new?scopes=gist&description=Family+Chores+Tracker" target="_blank">Create one here</a></small>
+                </div>
+                <div class="form-group">
+                    <label for="gist-id">Gist ID <span class="optional">(leave blank to create new)</span></label>
+                    <input type="text" id="gist-id" placeholder="abc123def456...">
+                </div>
+                <button id="connect-btn" class="btn btn-primary">Connect</button>
+                <div id="setup-error" class="error hidden"></div>
+            </div>
+        </div>
+
+        <!-- Main App -->
+        <div id="main-app" class="screen hidden">
+            <header>
+                <h1>Family Chores Tracker</h1>
+                <nav>
+                    <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+                    <button class="nav-btn" data-view="family">Family</button>
+                    <button class="nav-btn" data-view="tasks">Tasks</button>
+                    <button class="nav-btn" data-view="schedule">Schedule</button>
+                </nav>
+                <button id="settings-btn" class="btn btn-icon" title="Settings">⚙</button>
+            </header>
+
+            <!-- Dashboard View -->
+            <div id="dashboard-view" class="view">
+                <h2>Today's Overview</h2>
+                <div id="date-display" class="date-display"></div>
+                <div id="dashboard-cards" class="dashboard-cards"></div>
+                <h3>Weekly Progress</h3>
+                <div id="weekly-progress" class="weekly-progress"></div>
+            </div>
+
+            <!-- Family View -->
+            <div id="family-view" class="view hidden">
+                <div class="view-header">
+                    <h2>Family Members</h2>
+                    <button id="add-member-btn" class="btn btn-primary">+ Add Member</button>
+                </div>
+                <div id="family-list" class="family-list"></div>
+
+                <!-- Add/Edit Member Modal -->
+                <div id="member-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3 id="member-modal-title">Add Family Member</h3>
+                        <div class="form-group">
+                            <label for="member-name">Name</label>
+                            <input type="text" id="member-name" placeholder="Enter name">
+                        </div>
+                        <div class="form-group">
+                            <label for="member-avatar">Avatar Color</label>
+                            <div id="color-picker" class="color-picker">
+                                <span class="color-swatch" data-color="#FF6B6B" style="background:#FF6B6B"></span>
+                                <span class="color-swatch" data-color="#4ECDC4" style="background:#4ECDC4"></span>
+                                <span class="color-swatch" data-color="#45B7D1" style="background:#45B7D1"></span>
+                                <span class="color-swatch" data-color="#96CEB4" style="background:#96CEB4"></span>
+                                <span class="color-swatch" data-color="#FFEAA7" style="background:#FFEAA7"></span>
+                                <span class="color-swatch" data-color="#DDA0DD" style="background:#DDA0DD"></span>
+                                <span class="color-swatch" data-color="#FF8C42" style="background:#FF8C42"></span>
+                                <span class="color-swatch" data-color="#98D8C8" style="background:#98D8C8"></span>
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button id="save-member-btn" class="btn btn-primary">Save</button>
+                            <button id="cancel-member-btn" class="btn btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tasks View -->
+            <div id="tasks-view" class="view hidden">
+                <div class="view-header">
+                    <h2>Tasks</h2>
+                    <div class="view-actions">
+                        <button id="import-tasks-btn" class="btn btn-secondary">Import Spreadsheet</button>
+                        <button id="add-task-btn" class="btn btn-primary">+ Add Task</button>
+                    </div>
+                </div>
+                <input type="file" id="file-input" accept=".csv,.xlsx,.xls" class="hidden">
+                <div id="tasks-list" class="tasks-list"></div>
+
+                <!-- Add/Edit Task Modal -->
+                <div id="task-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3 id="task-modal-title">Add Task</h3>
+                        <div class="form-group">
+                            <label for="task-name">Task Name</label>
+                            <input type="text" id="task-name" placeholder="e.g., Vacuum living room">
+                        </div>
+                        <div class="form-group">
+                            <label for="task-category">Category</label>
+                            <select id="task-category">
+                                <option value="cleaning">Cleaning</option>
+                                <option value="kitchen">Kitchen</option>
+                                <option value="laundry">Laundry</option>
+                                <option value="outdoor">Outdoor</option>
+                                <option value="pets">Pets</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="modal-actions">
+                            <button id="save-task-btn" class="btn btn-primary">Save</button>
+                            <button id="cancel-task-btn" class="btn btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule View -->
+            <div id="schedule-view" class="view hidden">
+                <div class="view-header">
+                    <h2>Schedule</h2>
+                    <div class="view-actions">
+                        <select id="schedule-member-filter">
+                            <option value="all">All Members</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="schedule-content" class="schedule-content"></div>
+
+                <!-- Assign Task Modal -->
+                <div id="assign-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Assign Task</h3>
+                        <div class="form-group">
+                            <label for="assign-task">Task</label>
+                            <select id="assign-task"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="assign-member">Assign To</label>
+                            <select id="assign-member"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="assign-frequency">Frequency</label>
+                            <select id="assign-frequency">
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
+                            </select>
+                        </div>
+                        <div id="day-picker" class="day-picker">
+                            <label>Days</label>
+                            <div id="day-options" class="day-options"></div>
+                        </div>
+                        <div class="modal-actions">
+                            <button id="save-assign-btn" class="btn btn-primary">Save</button>
+                            <button id="cancel-assign-btn" class="btn btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Member Detail View (for checking off tasks) -->
+            <div id="member-view" class="view hidden">
+                <button id="back-to-dashboard" class="btn btn-back">← Back</button>
+                <div id="member-header" class="member-header"></div>
+                <div id="member-tasks" class="member-tasks"></div>
+            </div>
+
+            <!-- Settings Modal -->
+            <div id="settings-modal" class="modal hidden">
+                <div class="modal-content">
+                    <h3>Settings</h3>
+                    <div class="form-group">
+                        <label>Gist ID</label>
+                        <input type="text" id="settings-gist-id" readonly>
+                        <button id="copy-gist-id" class="btn btn-small">Copy</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Share this Gist ID with family members so they can connect.</label>
+                    </div>
+                    <div class="modal-actions">
+                        <button id="disconnect-btn" class="btn btn-danger">Disconnect</button>
+                        <button id="close-settings-btn" class="btn btn-secondary">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
