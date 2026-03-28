@@ -8,7 +8,7 @@ const App = (() => {
         token: '',
         gistId: '',
         family: [],    // { id, name, color }
-        tasks: [],     // { id, name, category }
+        tasks: [],     // { id, name, category, durationMin }
         schedules: [], // { id, taskId, memberId, frequency, days[] }
         completions: {} // { "YYYY-MM-DD": { scheduleId: true } }
     };
@@ -346,9 +346,11 @@ const App = (() => {
         $('member-tasks').innerHTML = schedules.map(s => {
             const task = state.tasks.find(t => t.id === s.taskId);
             const done = isCompleted(s.id, d);
+            const dur = task?.durationMin ? `${task.durationMin} min` : '';
             return `<div class="member-task-item ${done ? 'completed' : ''}" data-schedule="${s.id}">
                 <div class="checkbox">${done ? '✓' : ''}</div>
                 <span class="task-label">${task ? task.name : 'Unknown'}</span>
+                ${dur ? `<span class="task-duration">${dur}</span>` : ''}
                 <span class="task-meta">${s.frequency}</span>
             </div>`;
         }).join('');
@@ -462,6 +464,7 @@ const App = (() => {
             $('task-modal-title').textContent = 'Add Task';
             $('task-name').value = '';
             $('task-category').value = 'cleaning';
+            $('task-duration').value = '';
             $('task-modal').classList.remove('hidden');
         });
 
@@ -472,6 +475,7 @@ const App = (() => {
         $('save-task-btn').addEventListener('click', async () => {
             const name = $('task-name').value.trim();
             const category = $('task-category').value;
+            const duration = parseFloat($('task-duration').value) || 0;
             if (!name) return;
 
             if (editingTaskId) {
@@ -479,9 +483,10 @@ const App = (() => {
                 if (task) {
                     task.name = name;
                     task.category = category;
+                    task.durationMin = duration;
                 }
             } else {
-                state.tasks.push({ id: uid(), name, category });
+                state.tasks.push({ id: uid(), name, category, durationMin: duration });
             }
             await gist.save();
             $('task-modal').classList.add('hidden');
@@ -504,71 +509,187 @@ const App = (() => {
 
         if (ext === 'csv') {
             const text = await file.text();
-            parseCSV(text);
+            const rows = parseCSVToRows(text);
+            importRows(rows);
         } else if (ext === 'xlsx' || ext === 'xls') {
             const data = await file.arrayBuffer();
             const workbook = XLSX.read(data, { type: 'array' });
-            const sheet = workbook.Sheets[workbook.SheetNames[0]];
-            const csv = XLSX.utils.sheet_to_csv(sheet);
-            parseCSV(csv);
+            // Try to find the master sheet, otherwise use the first sheet
+            const masterName = workbook.SheetNames.find(n =>
+                /master/i.test(n)
+            ) || workbook.SheetNames[0];
+            const sheet = workbook.Sheets[masterName];
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            importRows(rows);
         }
         e.target.value = '';
     }
 
-    function parseCSV(text) {
-        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-        // Detect header
-        const header = lines[0].toLowerCase();
-        const hasHeader = header.includes('task') || header.includes('name') || header.includes('chore') || header.includes('category');
-        const startIdx = hasHeader ? 1 : 0;
-
-        let imported = 0;
-        for (let i = startIdx; i < lines.length; i++) {
-            const cols = parseCSVLine(lines[i]);
-            const name = cols[0]?.trim();
-            if (!name) continue;
-
-            // Check for duplicate
-            if (state.tasks.some(t => t.name.toLowerCase() === name.toLowerCase())) continue;
-
-            const category = guessCategory(cols[1]?.trim() || '', name);
-            state.tasks.push({ id: uid(), name, category });
-            imported++;
+    function importRows(rows) {
+        if (rows.length < 2) {
+            alert('No data found in the spreadsheet.');
+            return;
         }
 
-        if (imported > 0) {
-            gist.save();
-            renderTasks();
-            alert(`Imported ${imported} new task${imported > 1 ? 's' : ''}!`);
+        // Detect column indices from header row
+        const header = rows[0].map(h => String(h || '').toLowerCase().trim());
+        const col = {
+            group: header.findIndex(h => /task.?group/i.test(h)),
+            name: header.findIndex(h => /description|task.?name|chore/i.test(h)),
+            assigned: header.findIndex(h => /assign/i.test(h)),
+            frequency: header.findIndex(h => /frequency/i.test(h)),
+            duration: header.findIndex(h => /duration/i.test(h)),
+        };
+
+        // Fallback: if no "Description" column, use first column as name
+        if (col.name === -1) col.name = 0;
+
+        const defaultColors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF8C42', '#98D8C8'];
+        let colorIdx = 0;
+
+        // Helper: find or create a family member
+        function ensureMember(name) {
+            const normalized = name.trim();
+            if (!normalized) return null;
+            let member = state.family.find(m => m.name.toLowerCase() === normalized.toLowerCase());
+            if (!member) {
+                member = { id: uid(), name: normalized, color: defaultColors[colorIdx % defaultColors.length] };
+                colorIdx++;
+                state.family.push(member);
+            }
+            return member;
+        }
+
+        // Helper: parse "Assigned To" into individual member names
+        function parseAssignees(raw) {
+            if (!raw) return [];
+            const str = String(raw).trim();
+            // Handle "All" — will assign to everyone after all members are known
+            if (str.toLowerCase() === 'all') return ['__ALL__'];
+            // Handle "Amelie and Stephen", "Stephen and Amelie"
+            return str.split(/\s+and\s+/i).map(s => s.trim()).filter(Boolean);
+        }
+
+        // Helper: normalize frequency string from spreadsheet
+        function normalizeFrequency(raw, group) {
+            const str = String(raw || group || '').toLowerCase().trim();
+            if (/daily/.test(str)) return 'daily';
+            if (/week|bi-week|2x/.test(str)) return 'weekly';
+            if (/month|as needed/.test(str)) return 'monthly';
+            return 'weekly';
+        }
+
+        let importedTasks = 0;
+        let importedSchedules = 0;
+        let importedMembers = 0;
+        const startMembers = state.family.length;
+
+        // First pass: collect all unique member names so "All" works
+        const allAssignees = new Set();
+        for (let i = 1; i < rows.length; i++) {
+            const r = rows[i];
+            if (!r || !r[col.name]) continue;
+            const assignees = parseAssignees(r[col.assigned]);
+            assignees.forEach(a => { if (a !== '__ALL__') allAssignees.add(a); });
+        }
+        // Ensure all members exist
+        allAssignees.forEach(name => ensureMember(name));
+        importedMembers = state.family.length - startMembers;
+
+        // Second pass: import tasks and schedules
+        for (let i = 1; i < rows.length; i++) {
+            const r = rows[i];
+            const taskName = r[col.name] ? String(r[col.name]).trim() : '';
+            if (!taskName) continue;
+
+            const group = col.group >= 0 ? String(r[col.group] || '').trim() : '';
+            const duration = col.duration >= 0 ? parseFloat(r[col.duration]) || 0 : 0;
+            const freqRaw = col.frequency >= 0 ? String(r[col.frequency] || '') : '';
+            const frequency = normalizeFrequency(freqRaw, group);
+            const category = guessCategory(group, taskName);
+
+            // Find or create task
+            let task = state.tasks.find(t => t.name.toLowerCase() === taskName.toLowerCase());
+            if (!task) {
+                task = { id: uid(), name: taskName, category, durationMin: duration };
+                state.tasks.push(task);
+                importedTasks++;
+            }
+
+            // Parse assignees and create schedules
+            let assignees = parseAssignees(r[col.assigned]);
+            if (assignees.includes('__ALL__')) {
+                assignees = state.family.map(m => m.name);
+            }
+
+            assignees.forEach(assigneeName => {
+                const member = ensureMember(assigneeName);
+                if (!member) return;
+
+                // Check for duplicate schedule
+                const exists = state.schedules.some(s =>
+                    s.taskId === task.id && s.memberId === member.id && s.frequency === frequency
+                );
+                if (!exists) {
+                    state.schedules.push({
+                        id: uid(),
+                        taskId: task.id,
+                        memberId: member.id,
+                        frequency: frequency,
+                        days: [] // User picks specific days later
+                    });
+                    importedSchedules++;
+                }
+            });
+        }
+
+        gist.save();
+        renderTasks();
+
+        // Build summary message
+        const parts = [];
+        if (importedMembers > 0) parts.push(`${importedMembers} family member${importedMembers > 1 ? 's' : ''}`);
+        if (importedTasks > 0) parts.push(`${importedTasks} task${importedTasks > 1 ? 's' : ''}`);
+        if (importedSchedules > 0) parts.push(`${importedSchedules} assignment${importedSchedules > 1 ? 's' : ''}`);
+
+        if (parts.length > 0) {
+            alert(`Successfully imported:\n${parts.join('\n')}\n\nGo to Schedule to pick specific days for weekly/monthly tasks.`);
         } else {
-            alert('No new tasks found to import. Tasks may already exist.');
+            alert('No new data found to import. Everything may already exist.');
         }
     }
 
-    function parseCSVLine(line) {
-        const result = [];
-        let current = '';
-        let inQuotes = false;
-        for (const char of line) {
-            if (char === '"') { inQuotes = !inQuotes; }
-            else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
-            else { current += char; }
-        }
-        result.push(current);
-        return result;
+    function parseCSVToRows(text) {
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+        return lines.map(line => {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            for (const char of line) {
+                if (char === '"') { inQuotes = !inQuotes; }
+                else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
+                else { current += char; }
+            }
+            result.push(current);
+            return result;
+        });
     }
 
-    function guessCategory(explicit, name) {
-        if (explicit) {
-            const cat = explicit.toLowerCase();
-            if (['cleaning', 'kitchen', 'laundry', 'outdoor', 'pets', 'other'].includes(cat)) return cat;
+    function guessCategory(group, name) {
+        // Use the spreadsheet's Task Group first
+        const g = (group || '').toLowerCase();
+        if (g === 'daily' || g === 'weekly' || g === 'monthly') {
+            // Task Group is frequency, not category — guess from name
+        } else if (g) {
+            // If the group is a real category name, use it
+            if (['cleaning', 'kitchen', 'laundry', 'outdoor', 'pets', 'other'].includes(g)) return g;
         }
         const n = name.toLowerCase();
-        if (/dish|cook|kitchen|meal|food/.test(n)) return 'kitchen';
-        if (/laundry|wash|fold|iron|clothes/.test(n)) return 'laundry';
-        if (/mow|yard|garden|rake|snow|garage|trash|recycl/.test(n)) return 'outdoor';
-        if (/pet|dog|cat|feed.*animal|litter|walk.*dog/.test(n)) return 'pets';
-        if (/vacuum|mop|dust|clean|sweep|wipe|scrub|tidy|bath/.test(n)) return 'cleaning';
+        if (/dish|cook|kitchen|meal|food|lunch|dinner|coffee|fridge|stove|microwave|cabinet|grocer/.test(n)) return 'kitchen';
+        if (/laundry|wash(?!.*dog)|fold|iron|clothes|sheet|towel|bedding|dry.*transfer/.test(n)) return 'laundry';
+        if (/mow|yard|garden|rake|snow|garage|trash|recycl|grass|weed|patio|deck|outdoor|bin|curb|shed/.test(n)) return 'outdoor';
+        if (/pet|dog|cat|feed.*dog|litter|walk.*dog|groom|brush.*dog|bowl/.test(n)) return 'pets';
+        if (/vacuum|mop|dust|clean|sweep|wipe|scrub|tidy|bath|clutter|surface|switch|handle/.test(n)) return 'cleaning';
         return 'other';
     }
 
@@ -583,6 +704,7 @@ const App = (() => {
                 <div class="task-info">
                     <span class="task-category-badge cat-${t.category}">${t.category}</span>
                     <span>${t.name}</span>
+                    ${t.durationMin ? `<span class="task-duration">${t.durationMin} min</span>` : ''}
                 </div>
                 <div class="task-actions">
                     <button class="btn btn-small edit-task" data-id="${t.id}">Edit</button>
@@ -599,6 +721,7 @@ const App = (() => {
                 $('task-modal-title').textContent = 'Edit Task';
                 $('task-name').value = task.name;
                 $('task-category').value = task.category;
+                $('task-duration').value = task.durationMin || '';
                 $('task-modal').classList.remove('hidden');
             });
         });

@@ -539,6 +539,16 @@ header nav {
 .cat-pets { background: #FCE7F3; color: #9D174D; }
 .cat-other { background: #F3E8FF; color: #6B21A8; }
 
+.task-duration {
+    font-size: 0.78rem;
+    color: var(--text-light);
+    background: #F1F5F9;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
 .task-actions {
     display: flex;
     gap: 6px;
