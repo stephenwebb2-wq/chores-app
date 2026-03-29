@@ -2259,8 +2259,7 @@ const App = (() => {
     function initSettings() {
         $('settings-btn').addEventListener('click', () => {
             $('settings-gist-id').value = state.gistId;
-            const _cfg = JSON.parse(localStorage.getItem('chores_config') || '{}');
-            $('settings-token').value = _cfg.token || '';
+            $('settings-token').value = state.token || '';
             $('settings-token').type = 'password';
             $('toggle-token-btn').textContent = 'Show';
             // Sync active states
@@ -2299,8 +2298,7 @@ const App = (() => {
         });
 
         $('copy-token-btn').addEventListener('click', () => {
-            const token = (JSON.parse(localStorage.getItem('chores_config') || '{}')).token || '';
-            navigator.clipboard.writeText(token);
+            navigator.clipboard.writeText(state.token || '');
             $('copy-token-btn').textContent = 'Copied!';
             setTimeout(() => $('copy-token-btn').textContent = 'Copy', 1500);
         });
