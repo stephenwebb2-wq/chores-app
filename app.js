@@ -2259,6 +2259,10 @@ const App = (() => {
     function initSettings() {
         $('settings-btn').addEventListener('click', () => {
             $('settings-gist-id').value = state.gistId;
+            const _cfg = JSON.parse(localStorage.getItem('chores_config') || '{}');
+            $('settings-token').value = _cfg.token || '';
+            $('settings-token').type = 'password';
+            $('toggle-token-btn').textContent = 'Show';
             // Sync active states
             const currentTheme = localStorage.getItem('chores_theme') || 'light';
             $$('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === currentTheme));
@@ -2285,6 +2289,20 @@ const App = (() => {
             navigator.clipboard.writeText(state.gistId);
             $('copy-gist-id').textContent = 'Copied!';
             setTimeout(() => $('copy-gist-id').textContent = 'Copy', 1500);
+        });
+
+        $('toggle-token-btn').addEventListener('click', () => {
+            const input = $('settings-token');
+            const isHidden = input.type === 'password';
+            input.type = isHidden ? 'text' : 'password';
+            $('toggle-token-btn').textContent = isHidden ? 'Hide' : 'Show';
+        });
+
+        $('copy-token-btn').addEventListener('click', () => {
+            const token = (JSON.parse(localStorage.getItem('chores_config') || '{}')).token || '';
+            navigator.clipboard.writeText(token);
+            $('copy-token-btn').textContent = 'Copied!';
+            setTimeout(() => $('copy-token-btn').textContent = 'Copy', 1500);
         });
 
         $('disconnect-btn').addEventListener('click', () => {

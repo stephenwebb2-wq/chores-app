@@ -275,11 +275,20 @@
                     </div>
                     <div class="form-group">
                         <label>Gist ID</label>
-                        <input type="text" id="settings-gist-id" readonly>
-                        <button id="copy-gist-id" class="btn btn-small">Copy</button>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input type="text" id="settings-gist-id" readonly style="flex:1">
+                            <button id="copy-gist-id" class="btn btn-small">Copy</button>
+                        </div>
+                        <small>Share this with family members so they can connect.</small>
                     </div>
                     <div class="form-group">
-                        <label>Share this Gist ID with family members so they can connect.</label>
+                        <label>Personal Access Token</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input type="password" id="settings-token" readonly style="flex:1">
+                            <button id="toggle-token-btn" class="btn btn-small">Show</button>
+                            <button id="copy-token-btn" class="btn btn-small">Copy</button>
+                        </div>
+                        <small>Keep this private — do not share.</small>
                     </div>
                     <div class="modal-actions">
                         <button id="disconnect-btn" class="btn btn-danger">Disconnect</button>
