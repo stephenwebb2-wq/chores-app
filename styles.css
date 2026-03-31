@@ -1885,9 +1885,10 @@ header nav {
     }
 
     .task-right {
-        width: 100%;
+        flex: 1 1 100%;
         justify-content: flex-end;
-        margin-left: 40px; /* align under task name, past checkbox */
+        flex-wrap: wrap;
+        gap: 6px;
     }
 
     .tod-badge {
@@ -1900,8 +1901,15 @@ header nav {
     }
 
     .btn-task {
-        padding: 6px 12px;
-        font-size: 0.8rem;
+        padding: 6px 14px;
+        font-size: 0.82rem;
+    }
+
+    .task-btn-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
 
     .task-timer {
