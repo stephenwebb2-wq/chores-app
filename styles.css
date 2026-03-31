@@ -788,9 +788,7 @@ header nav {
 .task-label {
     font-weight: 500;
     font-size: 0.95rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.3;
 }
 
 .task-meta {
@@ -1866,4 +1864,47 @@ header nav {
     }
     .freq-col { min-width: 45px; }
     .report-stats { gap: 4px; }
+
+    /* Dashboard task cards — stack info above buttons on mobile */
+    .member-task-item {
+        flex-wrap: wrap;
+        padding: 12px 14px;
+        gap: 8px;
+    }
+
+    .task-left {
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .task-label {
+        white-space: normal;
+        word-break: break-word;
+        font-size: 0.92rem;
+        line-height: 1.35;
+    }
+
+    .task-right {
+        width: 100%;
+        justify-content: flex-end;
+        margin-left: 40px; /* align under task name, past checkbox */
+    }
+
+    .tod-badge {
+        font-size: 0.68rem;
+        padding: 2px 7px;
+    }
+
+    .manual-time-input {
+        width: 46px;
+    }
+
+    .btn-task {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+    }
+
+    .task-timer {
+        font-size: 0.82rem;
+    }
 }
