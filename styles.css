@@ -1865,6 +1865,24 @@ header nav {
     .freq-col { min-width: 45px; }
     .report-stats { gap: 4px; }
 
+    /* Tasks view — stack info above buttons on mobile */
+    .task-item {
+        flex-wrap: wrap;
+        padding: 12px 14px;
+        gap: 8px;
+    }
+
+    .task-info {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .task-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+
     /* Dashboard task cards — stack info above buttons on mobile */
     .member-task-item {
         flex-wrap: wrap;
